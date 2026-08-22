@@ -52,6 +52,11 @@
     "label": "Alert on changed admin Passwords",
     "recommendedRunInterval": "30m"
   },
+   {
+"name": "BlockedValidPassword",
+"label": "Alert when a correct password is blocked by a security control",
+"recommendedRunInterval": "30m"
+},
   {
     "name": "InactiveLicensedUsers",
     "label": "Alert on licensed users that have not logged in for X days",
