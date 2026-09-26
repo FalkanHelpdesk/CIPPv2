@@ -18,7 +18,7 @@ BeforeAll {
     . (Join-Path $script:RepoRoot 'Modules/CIPPCore/Public/Compare-CIPPIntuneObject.ps1')
     . (Join-Path $Baselines 'Get-CIPPBaselineCacheRows.ps1')
     . (Join-Path $Baselines 'Test-CIPPBaselineCacheCollected.ps1')
-    foreach ($Name in @('ExternalMFATrusted', 'IntuneDeviceRetirementDays', 'AppManagementPolicy', 'EnableAppConsentRequests', 'TeamsFederationConfiguration', 'OMEBranding')) {
+    foreach ($Name in @('ExternalMFATrusted', 'ExternalComplianceTrusted', 'IntuneDeviceRetirementDays', 'AppManagementPolicy', 'EnableAppConsentRequests', 'TeamsFederationConfiguration', 'OMEBranding')) {
         . (Join-Path $Baselines "Get-CIPPBaseline${Name}State.ps1")
         . (Join-Path $Baselines "Invoke-CIPPBaseline${Name}.ps1")
     }
@@ -54,6 +54,30 @@ Describe 'Get-CIPPBaselineExternalMFATrustedState' {
         Invoke-CIPPBaselineExternalMFATrusted -Remediate ([PSCustomObject]@{ trusted = $true }) -TenantFilter $script:Tenant -Current $null
         Should -Invoke New-GraphPostRequest -Times 1 -Exactly -ParameterFilter {
             $type -eq 'PATCH' -and $body -match '"isMfaAccepted":\s*true' -and $body -match 'isCompliantDeviceAccepted'
+        }
+    }
+}
+
+Describe 'Get-CIPPBaselineExternalComplianceTrustedState' {
+    It 'grades the compliance switch in BOTH directions' {
+        Mock New-CIPPDbRequest { @(@{ inboundTrust = @{ isCompliantDeviceAccepted = $true } } | ConvertTo-Cached) }
+        $Off = [PSCustomObject]@{ Variables = [PSCustomObject]@{ state = $false } }
+        $Prepared = Get-CIPPBaselineExternalComplianceTrustedState -Item $Off -TenantFilter $script:Tenant
+        (Get-Verdict -Expected $Prepared.Expected -Current $Prepared.Current).Count | Should -BeGreaterThan 0
+        $On = [PSCustomObject]@{ Variables = [PSCustomObject]@{ state = $true } }
+        $Prepared2 = Get-CIPPBaselineExternalComplianceTrustedState -Item $On -TenantFilter $script:Tenant
+        (Get-Verdict -Expected $Prepared2.Expected -Current $Prepared2.Current).Count | Should -Be 0
+    }
+
+    It 'patches the merged inboundTrust, never the lone flag' {
+        Mock New-GraphGetRequest { [PSCustomObject]@{ inboundTrust = [PSCustomObject]@{ isMfaAccepted = $true; isCompliantDeviceAccepted = $false; isHybridAzureADJoinedDeviceAccepted = $true } } }
+        Mock New-GraphPostRequest { }
+        Invoke-CIPPBaselineExternalComplianceTrusted -Remediate ([PSCustomObject]@{ trusted = $true }) -TenantFilter $script:Tenant -Current $null
+        Should -Invoke New-GraphPostRequest -Times 1 -Exactly -ParameterFilter {
+            $type -eq 'PATCH' -and
+            $body -match '"isCompliantDeviceAccepted":\s*true' -and
+            $body -match 'isMfaAccepted' -and
+            $body -match 'isHybridAzureADJoinedDeviceAccepted'
         }
     }
 }
@@ -134,7 +158,14 @@ Describe 'Get-CIPPBaselineEnableAppConsentRequestsState' {
         Mock New-CIPPDbRequest { @(@{ isEnabled = $true; reviewers = @(@{ query = '/v1.0/users/someone@contoso.com' }) } | ConvertTo-Cached) }
         $Item = [PSCustomObject]@{ Variables = [PSCustomObject]@{ ReviewerRoles = [PSCustomObject]@{ label = 'GA'; value = '62e90394-69f5-4237-9190-012177145e10' } } }
         $Prepared = Get-CIPPBaselineEnableAppConsentRequestsState -Item $Item -TenantFilter $script:Tenant
-        $Prepared.Current.missingReviewerRoles | Should -Contain '62e90394-69f5-4237-9190-012177145e10'
+        $Prepared.Current.missingReviewerRoles | Should -Contain 'GA'
+    }
+
+    It 'names the default Global Administrator role when no role is configured and it is missing' {
+        Mock New-CIPPDbRequest { @(@{ isEnabled = $true; reviewers = @(@{ query = '/v1.0/users/someone@contoso.com' }) } | ConvertTo-Cached) }
+        $Item = [PSCustomObject]@{ Variables = [PSCustomObject]@{} }
+        $Prepared = Get-CIPPBaselineEnableAppConsentRequestsState -Item $Item -TenantFilter $script:Tenant
+        $Prepared.Current.missingReviewerRoles | Should -Be @('Global Administrator')
     }
 
     It 'merges configured roles into the reviewer list without dropping hand-added ones' {
@@ -234,12 +265,30 @@ Describe 'Get-CIPPBaselineTeamsFederationConfigurationState' {
         (Get-Verdict -Expected $Prepared.Expected -Current $Prepared.Current).Count | Should -Be 0
     }
 
+    It 'grades an explicit EMPTY allow list as drift, not as allow-all (#364 breakage state)' {
+        # {"AllowedDomain":[]} means federation with NOBODY. Counting items instead of
+        # checking member presence graded broken tenants compliant forever.
+        Mock New-CIPPDbRequest { @(@{ AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false; AllowFederatedUsers = $true; AllowedDomains = @{ AllowedDomain = @() }; BlockedDomains = @() } | ConvertTo-Cached) }
+        $Item = [PSCustomObject]@{ Variables = [PSCustomObject]@{ DomainControl = 'AllowAllExternal'; AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false } }
+        $Prepared = Get-CIPPBaselineTeamsFederationConfigurationState -Item $Item -TenantFilter $script:Tenant
+        $Prepared.Current.allowedDomains | Should -Not -Be 'AllowAllKnownDomains'
+        (Get-Verdict -Expected $Prepared.Expected -Current $Prepared.Current).Count | Should -BeGreaterThan 0
+    }
+
+    It 'carries an empty OBJECT for allow-all - an empty ARRAY would be coerced into a block-everything allow list (#364)' {
+        Mock New-CIPPDbRequest { @(@{ AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false; AllowFederatedUsers = $true; AllowedDomains = @{}; BlockedDomains = @() } | ConvertTo-Cached) }
+        $Item = [PSCustomObject]@{ Variables = [PSCustomObject]@{ DomainControl = 'AllowAllExternal'; AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false } }
+        $Prepared = Get-CIPPBaselineTeamsFederationConfigurationState -Item $Item -TenantFilter $script:Tenant
+        $Payload = $Prepared.Current.writePayload.AllowedDomains
+        ($Payload | ConvertTo-Json -Compress) | Should -Be '{}'
+    }
+
     It 'writes through the ConfigAPI with the carried PUT-shaped payload' {
         Mock New-TeamsRequestV2 { }
-        $Current = [PSCustomObject]@{ writePayload = [PSCustomObject]@{ AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false; AllowFederatedUsers = $true; AllowedDomains = @{ AllowList = @('a.com') }; BlockedDomains = @() } }
+        $Current = [PSCustomObject]@{ writePayload = [PSCustomObject]@{ AllowTeamsConsumer = $false; AllowTeamsConsumerInbound = $false; AllowFederatedUsers = $true; AllowedDomains = @{ AllowedDomain = @(@{ Domain = 'a.com' }) }; BlockedDomains = @() } }
         Invoke-CIPPBaselineTeamsFederationConfiguration -Remediate $null -TenantFilter $script:Tenant -Current $Current
         Should -Invoke New-TeamsRequestV2 -Times 1 -Exactly -ParameterFilter {
-            $Action -eq 'Set' -and $NoRead -eq $true -and $Parameters.AllowedDomains.AllowList -contains 'a.com'
+            $Action -eq 'Set' -and $NoRead -eq $true -and @($Parameters.AllowedDomains.AllowedDomain).Domain -contains 'a.com'
         }
     }
 }

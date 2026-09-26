@@ -462,6 +462,21 @@ function Invoke-NinjaOneTenantSync {
 
         $DevicesToProcess = $Devices | Where-Object { $_.id -notin $ParsedDevices.id }
 
+        # Look up the compliance policy settings each non-compliant device fails in one Graph batch for the tenant.
+        # If the lookup fails the field is left untouched this run rather than being cleared.
+        $NonCompliantSettings = @{}
+        $NonCompliantSettingsAvailable = $false
+        if ($MappedFields.DeviceNonCompliantSettings) {
+            $NonCompliantDeviceIds = @($DevicesToProcess | Where-Object { $_.complianceState -ne 'compliant' -and $_.id } | Select-Object -ExpandProperty id)
+            try {
+                $NonCompliantSettings = Get-NinjaOneDeviceNonCompliantSettings -TenantFilter $Customer.defaultDomainName -ManagedDeviceIds $NonCompliantDeviceIds
+                $NonCompliantSettingsAvailable = $true
+            } catch {
+                $ErrorMessage = Get-CippException -Exception $_
+                Write-LogMessage -tenant $TenantFilter -API 'NinjaOneSync' -message "Failed to retrieve the non-compliant settings for $($NonCompliantDeviceIds.Count) devices, the Intune Non-Compliant Settings field will not be updated this run: $($ErrorMessage.NormalizedError)" -Sev 'Warning' -LogData $ErrorMessage
+            }
+        }
+
         # Parse Devices
         foreach ($Device in $DevicesToProcess) {
 
@@ -550,6 +565,9 @@ function Invoke-NinjaOneTenantSync {
                 }
             }
 
+            # Only non-compliant devices carry failing settings; compliant devices get the field cleared.
+            $DeviceNonCompliantSettings = if ($Device.complianceState -ne 'compliant') { $NonCompliantSettings["$($Device.id)"] } else { $null }
+
             $ParsedDevice = [PSCustomObject]@{
                 PartitionKey        = $Customer.CustomerId
                 RowKey              = $device.AzureADDeviceId
@@ -578,18 +596,11 @@ function Invoke-NinjaOneTenantSync {
                 UserIDs             = $DeviceUserIDs
                 UserDetails         = $DeviceUsersDetail
                 CompliancePolicies  = $DevicePolcies
+                NonCompliantSettings = $DeviceNonCompliantSettings
                 Groups              = $DeviceGroups
                 NinjaDevice         = $MatchedNinjaDevice
                 DeviceLink          = $ParsedDeviceName
             }
-
-            Add-CIPPAzDataTableEntity @DeviceTable -Entity @{
-                PartitionKey = $Customer.CustomerId
-                RowKey       = $device.AzureADDeviceId
-                RawDevice    = "$($ParsedDevice | ConvertTo-Json -Depth 100 -Compress)"
-            } -Force
-
-            $ParsedDevices.add($ParsedDevice)
 
             ### Update NinjaOne Device Fields
             if ($MatchedNinjaDevice) {
@@ -607,8 +618,8 @@ function Invoke-NinjaOneTenantSync {
                             Icon = 'fas fa-laptop'
                         },
                         @{
-                            Name = 'View Devices in CIPP'
-                            Link = "https://$($CIPPURL)/endpoint/MEM/devices?tenantFilter=$($Customer.defaultDomainName)"
+                            Name = 'View Device in CIPP'
+                            Link = "https://$($CIPPURL)/endpoint/MEM/devices/device?deviceId=$($Device.id)&tenantFilter=$($Customer.defaultDomainName)"
                             Icon = 'far fa-eye'
                         }
                     )
@@ -713,19 +724,39 @@ function Invoke-NinjaOneTenantSync {
 
             }
 
-            # Update Device
-            if ($MappedFields.DeviceSummary -or $MappedFields.DeviceLinks -or $MappedFields.DeviceCompliance) {
+            if ($MappedFields.DeviceNonCompliantSettings -and $NonCompliantSettingsAvailable) {
+                # A null value clears the field, so a NinjaOne condition on 'is not empty' only fires for devices with a real failure.
+                $NinjaDeviceUpdate | Add-Member -NotePropertyName $MappedFields.DeviceNonCompliantSettings -NotePropertyValue $DeviceNonCompliantSettings
+            }
+
+            # Update Device. Default to success so devices with no mapped fields are still cached.
+            $DeviceFieldsUpdated = $true
+            if ($MappedFields.DeviceSummary -or $MappedFields.DeviceLinks -or $MappedFields.DeviceCompliance -or $MappedFields.DeviceNonCompliantSettings) {
+                $DeviceFieldsUpdated = $false
                 try {
                     $UpdateBody = $NinjaDeviceUpdate | ConvertTo-Json -Depth 100
                     $Result = Invoke-WebRequest -Uri "https://$($Configuration.Instance)/api/v2/device/$($MatchedNinjaDevice.id)/custom-fields" -Method PATCH -Headers @{Authorization = "Bearer $($token.access_token)" } -ContentType 'application/json; charset=utf-8' -Body $UpdateBody
+                    $DeviceFieldsUpdated = $true
                 } catch {
-                    Write-Verbose "Error details: $($_ | ConvertTo-Json -Depth 5)"
+                    $ErrorMessage = Get-CippException -Exception $_
+                    Write-LogMessage -tenant $TenantFilter -API 'NinjaOneSync' -message "Failed to update NinjaOne custom fields for device '$($Device.deviceName)' ($($MatchedNinjaDevice.id)): $($ErrorMessage.NormalizedError)" -Sev 'Warning' -LogData $ErrorMessage
                 }
+            }
+
+            # Only cache the device once its fields have been written, so a failed update is retried on the next sync instead of being skipped permanently.
+            if ($DeviceFieldsUpdated) {
+                Add-CIPPAzDataTableEntity @DeviceTable -Entity @{
+                    PartitionKey = $Customer.CustomerId
+                    RowKey       = $device.AzureADDeviceId
+                    RawDevice    = "$($ParsedDevice | ConvertTo-Json -Depth 100 -Compress)"
+                } -Force
+
+                $ParsedDevices.add($ParsedDevice)
             }
         }
 
         # Enable Device Updates Subscription if needed.
-        if ($MappedFields.DeviceCompliance) {
+        if ($MappedFields.DeviceCompliance -or $MappedFields.DeviceNonCompliantSettings) {
             New-CIPPGraphSubscription -TenantFilter $TenantFilter -TypeofSubscription 'updated' -BaseURL $CIPPUrl -Resource 'devices' -EventType 'DeviceUpdate' -Headers 'NinjaOneSync'
         }
 
@@ -1088,7 +1119,7 @@ function Invoke-NinjaOneTenantSync {
                     },
                     @{
                         Name = 'Research Compromise'
-                        Link = "https://$($CIPPURL)/identity/administration/users/user/bec?userId=$($User.id)&tenantFilter=$($Customer.defaultDomainName)"
+                        Link = "https://$($CIPPURL)/identity/administration/bec/case?userId=$($User.id)&tenantFilter=$($Customer.defaultDomainName)"
                         Icon = 'fas fa-user-secret'
                     }
                 )
@@ -2018,7 +2049,7 @@ function Invoke-NinjaOneTenantSync {
             }
 
             # Unused Licenses
-            $UnusedLicenseLink = "https://$CIPPUrl/tenant/standards/bpa-report?tenantFilter=$($Customer.defaultDomainName)"
+            $UnusedLicenseLink = "https://$CIPPUrl/tenant/reports/list-licenses?tenantFilter=$($Customer.defaultDomainName)"
             if (-not $HasLicenseData) {
                 $WidgetData.add([PSCustomObject]@{ Value = 'No data'; Description = 'Unused Licenses'; Colour = '#CCCCCC'; Link = $UnusedLicenseLink })
             } else {
@@ -2034,7 +2065,7 @@ function Invoke-NinjaOneTenantSync {
             $WidgetData.add((& $NewPostureWidget -Description 'Unified Audit Log' -Link "https://security.microsoft.com/auditlogsearch?viewid=Async%20Search&tid=$($Customer.customerId)" -HasData $HasAuditConfig -State $UnifiedAuditLogEnabled))
 
             # Password Never Expires
-            $WidgetData.add((& $NewPostureWidget -Description 'Password Never Expires' -Link "https://$CIPPUrl/tenant/standards/bpa-report?tenantFilter=$($Customer.defaultDomainName)" -HasData $HasDomainData -State $PasswordNeverExpires))
+            $WidgetData.add((& $NewPostureWidget -Description 'Password Never Expires' -Link "https://$CIPPUrl/tenant/administration/domains?tenantFilter=$($Customer.defaultDomainName)" -HasData $HasDomainData -State $PasswordNeverExpires))
 
             # OAuth App Consent
             $WidgetData.add((& $NewPostureWidget -Description 'OAuth App Consent' -Link "https://entra.microsoft.com/$($Customer.defaultDomainName)/#view/Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/UserSettings" -HasData $HasAuthPolicy -State $OAuthConsentRestricted))

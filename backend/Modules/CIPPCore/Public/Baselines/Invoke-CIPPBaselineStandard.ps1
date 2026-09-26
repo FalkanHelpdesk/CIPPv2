@@ -108,6 +108,61 @@ function Invoke-CIPPBaselineStandard {
         if ($Definition.package) { throw "Package standard $($Item.BaseName) must be expanded by the resolver and never executes directly." }
         $Label = $Definition.label ?? $Item.Standard
 
+        # A disabled definition is not ready for use: the catalog hides it, and anything
+        # still configured from before skips here - never compared, never written - with
+        # the reason visible instead of a silent absence.
+        if ($Definition.disabled -eq $true) {
+            if ($GradeOnly) { return $null }
+            Write-LogMessage -API 'Baselines' -tenant $TenantFilter -message "`"$Label`" is disabled (not ready for use) - skipped without comparing or changing anything. - Run $RunId" -Sev 'Info'
+            $Disabled = [PSCustomObject]@{
+                Item = $Item; Mode = $Mode; TriggeredBy = $TriggeredBy
+                ExpectedValue = $null; CurrentValue = $null; Compliant = $false
+                PendingVerification = $false; LicenseAvailable = $true
+                Status = 'No Data'; Remediated = $false; Outcome = 'Skipped-Disabled'
+                Diff = $null; RowDiff = @(); Manual = $null; Inheritance = @($Item.Tiers)
+                AlertEvent = $null; CacheType = $null
+            }
+            Set-CIPPBaselineResult -Result $Disabled -Prior $null -RunId $RunId -Detail 'This standard is disabled - it is not ready for use and was skipped.'
+            return $Disabled
+        }
+
+        # Definition-aware variable pass: declared defaults apply at RUN time, not just as
+        # editor seeds. A blank variable would otherwise splice its raw '%token%' into the
+        # expected value and grade as permanent fake drift ('%enabled%' vs true). Rules:
+        # - locked variables always carry their declared value - stored data never overrides;
+        # - a blank variable takes default/recommended, EXCEPT omitWhenBlank ones, where
+        #   blank deliberately means 'prune the key';
+        # - tenant tokens typed into variable VALUES (quarantine@%defaultdomain%) resolve
+        #   here, because prepare hooks read variables directly and never pass through the
+        #   $Render step that resolves them for declarative standards.
+        $NormalizeVariables = {
+            param($Variables)
+            $Normalized = $Variables ?? [PSCustomObject]@{}
+            if ($Normalized -isnot [System.Management.Automation.PSCustomObject]) {
+                $Normalized = ConvertTo-Json -Depth 100 -InputObject $Normalized | ConvertFrom-Json
+            }
+            foreach ($DeclaredVariable in (($Definition.variables ?? [PSCustomObject]@{}).PSObject.Properties)) {
+                $Spec = $DeclaredVariable.Value
+                $Fallback = $Spec.default ?? $Spec.recommended
+                if ($null -eq $Fallback) { continue }
+                $IsBlank = [string]::IsNullOrEmpty("$($Normalized.$($DeclaredVariable.Name))")
+                if ($Spec.locked -eq $true -or ($IsBlank -and $Spec.omitWhenBlank -ne $true)) {
+                    if ($Normalized.PSObject.Properties[$DeclaredVariable.Name]) {
+                        $Normalized.$($DeclaredVariable.Name) = $Fallback
+                    } else {
+                        $Normalized | Add-Member -NotePropertyName $DeclaredVariable.Name -NotePropertyValue $Fallback
+                    }
+                }
+            }
+            foreach ($VariableProperty in $Normalized.PSObject.Properties) {
+                if ($VariableProperty.Value -is [string] -and $VariableProperty.Value.Contains('%')) {
+                    $VariableProperty.Value = Get-CIPPTextReplacement -TenantFilter $TenantFilter -Text $VariableProperty.Value
+                }
+            }
+            $Normalized
+        }
+        $Item.Variables = & $NormalizeVariables $Item.Variables
+
         # A flat requiredCapabilities list is any-of; a nested array is a group that must
         # also match (AND of any-of groups).
         $Required = @($Definition.requiredCapabilities)
@@ -205,19 +260,23 @@ function Invoke-CIPPBaselineStandard {
         # Per-property verdicts default to 'accept' (tolerate); 'denyDelete' marks the path's
         # object for deletion. Both filter the diff; deny-delete parks the row at Delete
         # Pending instead of scoring it Accepted.
-        $AcceptedPaths = $(try { $Prior.AcceptedPaths | ConvertFrom-Json } catch { $null })
+        $AcceptedPaths = $(try { if ($Prior.AcceptedPaths) { $Prior.AcceptedPaths | ConvertFrom-Json -ErrorAction Stop } } catch { $null })
         $AcceptedKeys = @($AcceptedPaths.PSObject.Properties.Name | Where-Object { $_ })
         $DenyDeleteKeys = @($AcceptedPaths.PSObject.Properties | Where-Object { $_.Name -and $_.Value.verdict -eq 'denyDelete' } | ForEach-Object { $_.Name })
         $ExpectedTemplate = & $Render $Definition.expected $Item.Variables
         $Expected = & $ResolveAnyOf $ExpectedTemplate $null $false
         $Tiers = foreach ($Tier in @($Item.Tiers)) {
             if (-not $Tier) { continue }
+            # Normalized the same way as the winning item so the inheritance display shows
+            # what the tier actually enforces (defaults applied, tenant tokens resolved),
+            # never a raw '%enabled%' template.
+            $TierVariables = & $NormalizeVariables $Tier.variables
             [PSCustomObject]@{
                 templateName     = $Tier.templateName
                 assignedTo       = $Tier.assignedTo
                 # For prepare-backed standards the rendered expected is just a template
                 # reference, so show what the tier CONFIGURES instead.
-                value            = $(if ($Definition.prepare) { $Tier.variables } else { & $ResolveAnyOf (& $Render $Definition.expected $Tier.variables) $null $false })
+                value            = $(if ($Definition.prepare) { $TierVariables } else { & $ResolveAnyOf (& $Render $Definition.expected $TierVariables) $null $false })
                 remediateEnabled = [bool]$Tier.remediateEnabled
                 alertEnabled     = [bool]$Tier.alertEnabled
                 alertOnRemediate = [bool]$Tier.alertOnRemediate
@@ -267,21 +326,32 @@ function Invoke-CIPPBaselineStandard {
             return $Result
         }
 
-        # A required variable left blank leaves the raw "%var%" token in the spec. That is not
-        # a value: comparing it is permanent drift and writing it sends the literal string to
-        # the API. Blank OPTIONAL fields are legitimate, and omitWhenBlank keys are pruned.
+        # A variable left blank leaves its raw "%var%" token in the spec. That is not a
+        # value: comparing it is permanent drift and writing it sends the literal string to
+        # the API. Required blanks are always a hard stop; a NON-required blank is one too
+        # when its token actually survived into the rendered expected (no default filled it
+        # and omitWhenBlank did not prune it). Pruned/optional blanks are legitimate.
         $ConfiguredVariables = $Item.Variables ?? [PSCustomObject]@{}
+        $RenderedExpectedJson = $(if ($null -ne $ExpectedTemplate) { ConvertTo-Json -Compress -Depth 100 -InputObject $ExpectedTemplate } else { '' })
         $Unresolved = @(($Definition.variables ?? [PSCustomObject]@{}).PSObject.Properties | Where-Object {
-                $_.Value.required -eq $true -and
-                [string]::IsNullOrEmpty("$($ConfiguredVariables.$($_.Name))")
+                [string]::IsNullOrEmpty("$($ConfiguredVariables.$($_.Name))") -and
+                ($_.Value.required -eq $true -or $RenderedExpectedJson.Contains(('%{0}%' -f $_.Name)))
             } | ForEach-Object { $_.Name })
         if ($Unresolved.Count -gt 0) {
             if ($GradeOnly) { return $null }
             $Missing = $Unresolved -join ', '
             Write-LogMessage -API 'Baselines' -tenant $TenantFilter -message "`"$Label`" is missing a value for $Missing - nothing is compared or changed until the baseline configures it. - Run $RunId" -Sev 'Error'
-            $null = Add-CIPPBaselineHistoryEvent -TenantFilter $TenantFilter -Standard $Item.Standard -Mode $Mode -TriggeredBy $TriggeredBy -Outcome 'Error' -Detail "Not configured: no value for $Missing - the standard was skipped instead of comparing or writing the raw variable name." -RunId $RunId
+            $NotConfiguredDetail = "Not configured: no value for $Missing - the standard was skipped instead of comparing or writing the raw variable name."
             $Result.Outcome = 'Error'
             $Result.Status = $PriorStatus ?? 'No Data'
+            if ($Prior) {
+                # The standard is already visible via its prior row - record the run only.
+                $null = Add-CIPPBaselineHistoryEvent -TenantFilter $TenantFilter -Standard $Item.Standard -Mode $Mode -TriggeredBy $TriggeredBy -Outcome 'Error' -Detail $NotConfiguredDetail -RunId $RunId
+            } else {
+                # First sight: write the No Data row too, or the standard is invisible in the
+                # alignment view and reads as if it never made it into the baseline.
+                Set-CIPPBaselineResult -Result $Result -Prior $Prior -RunId $RunId -Detail $NotConfiguredDetail
+            }
             return $Result
         }
 
@@ -290,7 +360,7 @@ function Invoke-CIPPBaselineStandard {
             if ($GradeOnly) { return $null }
             $Manual = & $Render $Definition.manual $Item.Variables
             $Result.Manual = $Manual
-            $Completed = [bool]($(try { $Prior.CurrentValue | ConvertFrom-Json } catch { $null })?.completed)
+            $Completed = [bool]($(try { if ($Prior.CurrentValue) { $Prior.CurrentValue | ConvertFrom-Json -ErrorAction Stop } } catch { $null })?.completed)
             $LastDone = if ("$($Prior.LastRemediated)" -match '^\d+$') { [int64]$Prior.LastRemediated } else { 0 }
             $ReopenSeconds = switch ($Manual.reopen) {
                 'weekly' { 7 * 86400 }
@@ -358,6 +428,11 @@ function Invoke-CIPPBaselineStandard {
         # The Where-Object is load-bearing: @($null).Count is 1, so an unfiltered @() test is
         # true for every definition that simply omits the property.
         $JustRefreshed = $false
+        # Carried into the No Data row so the operator sees WHY there was nothing to grade
+        # instead of a bare absence: a thrown collector, a prepare-declared reason, or the
+        # generic empty-cache pointer.
+        $CollectorFailure = $null
+        $PrepareNoDataReason = $null
         $CacheCollector = Get-Command -Name "Set-CIPPDBCache$($Definition.read.cacheType)" -ErrorAction SilentlyContinue
         $CollectorArgs = @{ TenantFilter = $TenantFilter }
         foreach ($Argument in ($Definition.read.collectorArgs ?? [PSCustomObject]@{}).PSObject.Properties) {
@@ -377,9 +452,11 @@ function Invoke-CIPPBaselineStandard {
                     $null = & $CacheCollector @CollectorArgs
                     $Prepared = & $Definition.prepare -Item $Item -TenantFilter $TenantFilter
                 } catch {
+                    $CollectorFailure = $_.Exception.Message
                     Write-Information "Baselines: cache collection for $($Definition.read.cacheType) on $TenantFilter failed: $($_.Exception.Message)"
                 }
             }
+            $PrepareNoDataReason = "$($Prepared.NoDataReason)"
             if ($null -ne $Prepared.Expected) {
                 $ExpectedTemplate = $Prepared.Expected
                 $Expected = $Prepared.Expected
@@ -411,6 +488,7 @@ function Invoke-CIPPBaselineStandard {
                     $null = & $CacheCollector @CollectorArgs
                     $Current = & $ReadCurrent
                 } catch {
+                    $CollectorFailure = $_.Exception.Message
                     Write-Information "Baselines: cache collection for $($Definition.read.cacheType) on $TenantFilter failed: $($_.Exception.Message)"
                 }
             }
@@ -650,10 +728,26 @@ function Invoke-CIPPBaselineStandard {
             $Result.Outcome = 'Compliant'
             $Result.Status = 'Compliant'
         } elseif ($null -eq $Current) {
-            # Nothing to honestly report and remediation does not apply, so nothing is written.
-            Write-LogMessage -API 'Baselines' -tenant $TenantFilter -message "$($Item.Standard): no $($Definition.read.cacheType) data in CIPPDb after collection and remediation does not apply - skipped, nothing written." -Sev 'Info'
+            # No live object to grade. First sight writes a visible 'No Data' row carrying the
+            # reason: an invisible standard is indistinguishable from one the migration or the
+            # editor dropped, which is exactly how a fleet of collector failures reads to an
+            # operator. A prior row stays untouched so a transient collection failure never
+            # overwrites known-good state with No Data.
+            $NoDataReason = if ($PrepareNoDataReason) {
+                $PrepareNoDataReason
+            } elseif ($CollectorFailure) {
+                "collecting the $($Definition.read.cacheType) cache failed: $CollectorFailure"
+            } elseif (-not $CacheCollector) {
+                "no collector exists for the $($Definition.read.cacheType) cache"
+            } else {
+                "the $($Definition.read.cacheType) cache has no data for this tenant after collection - check the CIPPDBCache log entries for this tenant for the collection error"
+            }
+            Write-LogMessage -API 'Baselines' -tenant $TenantFilter -message "$($Item.Standard): $NoDataReason - reported as No Data, remediation does not apply. - Run $RunId" -Sev 'Info'
             $Result.Outcome = 'Skipped-NoCache'
             $Result.Status = $PriorStatus ?? 'No Data'
+            if (-not $Prior -and -not $GradeOnly) {
+                Set-CIPPBaselineResult -Result $Result -Prior $Prior -RunId $RunId -Detail "No Data: $NoDataReason"
+            }
             return $Result
         } else {
             $Result.Outcome = 'Drift'

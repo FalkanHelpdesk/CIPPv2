@@ -47,7 +47,8 @@ A label on the card indicates which defaults are currently in effect: **Using Te
 | Remove all Rules                              | Removes the inbox rules on the user's mailbox.                         |
 | Reset Password                                | Resets the user's password.                                            |
 | Keep copy of forwarded mail in source mailbox | Where mail is being forwarded, retains a copy in the original mailbox. |
-| Delete user                                   | Deletes the user account.                                              |
+| Delete User                                   | Deletes the user account.                                              |
+| Wipe Mobile Devices (account data only)       | Wipes the Exchange account data from the user's registered mobile devices, without removing the devices themselves. |
 | Remove all Mobile Devices                     | Removes the user's registered mobile devices.                          |
 | Disable Sign in                               | Blocks the user from signing in.                                       |
 | Remove all MFA Devices                        | Removes the user's registered multi-factor authentication methods.     |
@@ -61,7 +62,7 @@ An Out of Office message alone is enough for these defaults to count as configur
 A **Send results to** section chooses where the outcome of an offboarding is reported, with options for Webhook, E-mail, and PSA.
 
 {% hint style="info" %}
-If a tenant has its own offboarding defaults saved, those replace your personal defaults entirely for that tenant — including when the tenant message field is empty.
+If a tenant has its own offboarding defaults saved, those replace your personal defaults entirely for that tenant, including when the tenant message field is empty.
 {% endhint %}
 
 ## Portal Links Configuration

@@ -5,7 +5,7 @@ function Invoke-ExecIRMConfiguration {
     .ROLE
         Exchange.Mailbox.ReadWrite
     .DESCRIPTION
-        Enables or disables Microsoft Purview Message Encryption for a tenant by setting AzureRMSLicensingEnabled, or runs Test-IRMConfiguration to verify that encryption and decryption work end to end.
+        Updates the Microsoft Purview Message Encryption configuration for a tenant (AzureRMSLicensingEnabled, SimplifiedClientAccessEnabled, EnablePdfEncryption, DecryptAttachmentForEncryptOnly, SimplifiedClientAccessDoNotForwardDisabled, SimplifiedClientAccessEncryptOnlyDisabled, TransportDecryptionSetting; only the settings present in the body are changed), or runs Test-IRMConfiguration to verify that encryption and decryption work end to end.
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
@@ -30,9 +30,22 @@ function Invoke-ExecIRMConfiguration {
                 Write-LogMessage -Headers $Headers -API $APIName -tenant $TenantFilter -message "Tested the message encryption configuration for $SenderAddress" -Sev Info
             }
             'Set' {
-                $AzureRMSLicensingEnabled = [System.Convert]::ToBoolean($Request.Body.AzureRMSLicensingEnabled)
-                $null = New-ExoRequest -tenantid $TenantFilter -cmdlet 'Set-IRMConfiguration' -cmdParams @{ AzureRMSLicensingEnabled = $AzureRMSLicensingEnabled }
-                $Results = "Successfully $(if ($AzureRMSLicensingEnabled) { 'enabled' } else { 'disabled' }) Microsoft Purview Message Encryption."
+                # Only touch the settings the caller sent, so an API client that posts just
+                # AzureRMSLicensingEnabled does not silently flip the others. Whitelisted: the body is
+                # caller-controlled and goes straight to Set-IRMConfiguration.
+                $cmdParams = @{}
+                foreach ($Key in 'AzureRMSLicensingEnabled', 'SimplifiedClientAccessEnabled', 'EnablePdfEncryption', 'DecryptAttachmentForEncryptOnly', 'SimplifiedClientAccessDoNotForwardDisabled', 'SimplifiedClientAccessEncryptOnlyDisabled') {
+                    if ($null -ne $Request.Body.$Key) { $cmdParams[$Key] = [System.Convert]::ToBoolean($Request.Body.$Key) }
+                }
+                if ($Request.Body.TransportDecryptionSetting -in 'Disabled', 'Optional', 'Mandatory') {
+                    $cmdParams.TransportDecryptionSetting = $Request.Body.TransportDecryptionSetting
+                }
+                if ($cmdParams.Count -eq 0) {
+                    throw 'No message encryption settings were provided.'
+                }
+                $null = New-ExoRequest -tenantid $TenantFilter -cmdlet 'Set-IRMConfiguration' -cmdParams $cmdParams
+                $Applied = ($cmdParams.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name) = $($_.Value)" }) -join ', '
+                $Results = "Successfully updated the message encryption configuration: $Applied."
                 Write-LogMessage -Headers $Headers -API $APIName -tenant $TenantFilter -message $Results -Sev Info
             }
             default {
