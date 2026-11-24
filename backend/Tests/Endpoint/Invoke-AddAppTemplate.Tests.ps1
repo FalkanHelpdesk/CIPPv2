@@ -21,6 +21,7 @@ BeforeAll {
     # Only the helpers these tests actually reach are stubbed. Get-CIPPAzDataTableEntity is not,
     # because the endpoint only calls it on the GUID upsert path, which no test here exercises.
     function Get-CippTable { param($tablename) @{} }
+    function Test-CippTemplateWriteAccess { param($Permission, $PartitionKey, $RowKey) $true }
     function Add-CIPPAzDataTableEntity { param([switch]$Force, $Entity) $script:LastEntity = $Entity }
     function Write-LogMessage { param($headers, $API, $message, $Sev, $LogData) }
     function Get-CippException {
@@ -96,6 +97,22 @@ Describe 'Invoke-AddAppTemplate' {
         $Response.StatusCode | Should -Be ([System.Net.HttpStatusCode]::InternalServerError)
         $Response.Body.Results | Should -Match 'uploaded installer content'
         $script:LastEntity | Should -BeNullOrEmpty
+    }
+
+    It 'accepts a script app that carries its scripts alongside a stale Graph body' {
+        $Row = New-GraphAppRow -OdataType '#microsoft.graph.win32LobApp' -DisplayName 'Adobe - Disable Javascript'
+        $Request = New-TemplateRequest -Apps @(
+            [pscustomobject]@{
+                appType = 'win32ScriptApp'
+                appName = 'Adobe - Disable Javascript'
+                config  = (@{ applicationName = 'Adobe - Disable Javascript'; installScript = 'exit 0'; IntuneBody = $Row; AssignTo = 'On' } | ConvertTo-Json -Depth 15 -Compress)
+            }
+        )
+
+        $Response = Invoke-AddAppTemplate -Request $Request -TriggerMetadata $null
+
+        $Response.StatusCode | Should -Be ([System.Net.HttpStatusCode]::OK)
+        $script:LastEntity | Should -Not -BeNullOrEmpty
     }
 
     It 'rejects the whole template when only one of its apps carries a Graph body' {

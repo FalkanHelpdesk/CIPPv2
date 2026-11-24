@@ -36,7 +36,7 @@ Aliases entered here are added to the account. This form does not remove aliases
 | Remove all licenses                   | Strips every licence from the account and ignores whatever is selected in the licence box.                                                                                |
 
 {% hint style="info" %}
-Emptying the **Licenses** box on its own does nothing, because an edit with no licences selected and this switch off is treated as no licence change at all. Use **Remove all licenses** to take the last licence off an account.
+Emptying the **Licenses** box on an account that has licences turns **Remove all licenses** on, and a warning confirms that every licence will be removed on submit. Turning the switch back off leaves the licences as they are, because an edit with no licences selected and this switch off is treated as no licence change at all. Adding a licence back to the box turns the switch off again.
 {% endhint %}
 
 {% hint style="info" %}
@@ -81,6 +81,7 @@ Any directory attributes added under [user-settings.md](../../../../shared-featu
 | Schedule this user edit                | Defers the edit to a chosen date instead of applying it immediately, which suits changes tied to a start date or a departure. |
 | Scheduled edit date                    | The date the edit should run.                                                                                                 |
 | Send results to Webhook / E-mail / PSA | Delivers the outcome of the scheduled edit to the notification channels configured for the tenant.                            |
+| Push notification to my devices        | Sends the outcome of the scheduled edit as a push notification to the devices you registered under [user-settings.md](../../../../shared-features/menu-bar/user-settings.md "mention"). Only you receive it, and it needs at least one device registered there. |
 | HaloPSA Ticket                         | An existing HaloPSA ticket to add the results to as a note, instead of raising a new ticket. Only shown once **Send results to PSA** is on and the HaloPSA integration is enabled. |
 | Reference                              | Free text added to the notification title so the task can be recognised later.                                                |
 

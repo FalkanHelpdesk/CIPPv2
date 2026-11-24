@@ -122,7 +122,7 @@ const Page = () => {
         </Stack>
       ),
       confirmText:
-        'Run [templateName] now? Pick a single covered tenant, or All Tenants in Template for the whole assignment. Standards in report-only stages are compared without changes.',
+        'Run [templateName] now? Pick a single covered tenant, or All Tenants in Template for the whole assignment. Standards in report-only stages are compared without changes. The configuration in this baseline is applied as-is: settings from other assigned baselines (even more specific ones) and tenant overrides are ignored for this run.',
       multiPost: false,
       relatedQueryKeys: ['ListBaseline*'],
     },
@@ -665,13 +665,14 @@ const Page = () => {
         'updatedBy',
       ]}
       queryKey="ListBaselines-table"
+      defaultSorting={[{ id: 'baselineName', desc: false }]}
       filters={filterList}
     />
   );
 }
 
 Page.getLayout = (page) => (
-  <DashboardLayout>
+  <DashboardLayout usesTenant={false}>
     <TabbedLayout tabOptions={tabOptions}>{page}</TabbedLayout>
   </DashboardLayout>
 )

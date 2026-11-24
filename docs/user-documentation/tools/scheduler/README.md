@@ -1,6 +1,6 @@
 # Scheduler
 
-The task scheduler runs CIPP functionality on a schedule and delivers the results to your PSA, a webhook, or email.
+The task scheduler runs CIPP functionality on a schedule and delivers the results to your PSA, a webhook, email, or a push notification on your own devices.
 
 Tasks can run once, or repeat every day, 7 days, 30 days, or year.
 
@@ -38,7 +38,7 @@ Every task needs a tenant, a name, and a command. The rest depends on which of t
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Select a Tenant        | The tenant the task runs against. All Tenants and tenant groups are both selectable, so one task can cover a whole estate.                           |
 | Task Name              | The name the task appears under in the table.                                                                                                        |
-| Post Execution Actions | Where the results go once the task has run. Choose any combination of Webhook, Email, and PSA, or none to leave the results on the task itself.      |
+| Post Execution Actions | Where the results go once the task has run. Choose any combination of Webhook, Email, PSA and Push (notify me), or none to leave the results on the task itself. Push sends a notification to the devices you registered under [user-settings.md](../../shared-features/menu-bar/user-settings.md "mention"); it goes to you, the person creating the task, not to a tenant-wide channel. The option is only offered, and the task only saves with it, once you have registered at least one device. |
 | PSA Ticket Strategy    | How many tickets the task raises. Only shown once PSA is among the post execution actions.                                                           |
 | HaloPSA Ticket         | An existing HaloPSA ticket to add the task's results to as a note, instead of raising a new ticket. Only shown once PSA is among the post execution actions and the HaloPSA integration is enabled. |
 | Reference              | An optional note identifying the task. It is also added to the title of any notification the task sends, which makes it useful for routing in a PSA. |
@@ -57,7 +57,7 @@ The field always holds one of the two options rather than an inherited setting. 
 {% endhint %}
 
 {% hint style="info" %}
-If the ticket entered in **HaloPSA Ticket** is closed or can no longer be found, CIPP raises a new ticket instead of adding a note to it.
+If the ticket entered in **HaloPSA Ticket** is closed or can no longer be found, CIPP raises a new ticket instead of adding a note to it. A ticket assigned to another agent counts as not found unless the agent the HaloPSA API application logs in as can view and edit other agents' tickets; see [HaloPSA](../../cipp/integrations/halopsa.md).
 {% endhint %}
 
 A pair of buttons then selects the task type:

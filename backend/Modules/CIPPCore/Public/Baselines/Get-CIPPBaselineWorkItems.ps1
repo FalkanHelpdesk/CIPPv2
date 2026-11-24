@@ -41,8 +41,8 @@ function Get-CIPPBaselineWorkItems {
     $Groups = @()
     try { $Groups = @(Get-TenantGroups) } catch { Write-Information "Get-CIPPBaselineWorkItems: tenant group lookup failed: $($_.Exception.Message)" }
 
+    # Every baseline resolves even when one is run by hand, so its run cannot overwrite what a more specific baseline, an override or a conflict decides.
     $Baselines = @(Get-CIPPBaseline)
-    if ($TemplateId) { $Baselines = @($Baselines | Where-Object { $_.GUID -eq $TemplateId }) }
     $Definitions = @(Get-CIPPBaselineDefinition)
     $DefinitionsByName = @{}
     foreach ($Definition in $Definitions) { if ($Definition.name) { $DefinitionsByName[$Definition.name] = $Definition } }
@@ -97,10 +97,23 @@ function Get-CIPPBaselineWorkItems {
             elseif ($HasAllTenants) { 0 } else { 2 }
             $Scope = @('allTenants', 'group', 'tenant')[$Rank]
 
-            # Ascending stage walk: later stages replace earlier configs for the same instance.
-            $StageConfigs = @{}
+
+            $StageConfigs = @{} # identity -> List[config]
             $StageNumbers = @{}
             $StageNames = @{}
+            $AddStageConfig = {
+                param($Config, $StageNumber, $StageName)
+                $IdentityKey = & $IdentityFor "$($Config.instance ?? $Config.standard)" $Config.variables
+                if ($StageConfigs.ContainsKey($IdentityKey) -and $StageNumbers[$IdentityKey] -eq $StageNumber) {
+                    $StageConfigs[$IdentityKey].Add($Config)
+                } else {
+                    $Configs = [System.Collections.Generic.List[object]]::new()
+                    $Configs.Add($Config)
+                    $StageConfigs[$IdentityKey] = $Configs
+                    $StageNumbers[$IdentityKey] = $StageNumber
+                    $StageNames[$IdentityKey] = $StageName
+                }
+            }
             $StageNumber = 0
             foreach ($Stage in ($Baseline.stages | Select-Object -First $State.currentStage)) {
                 $StageNumber++
@@ -121,90 +134,87 @@ function Get-CIPPBaselineWorkItems {
                             $PackageTemplateRows[$Partition] = @(Get-CIPPAzDataTableEntity @TemplatesTable -Filter "PartitionKey eq '$SafePartition'")
                         }
                         foreach ($Member in @(Expand-CIPPBaselineTemplatePackage -Definition $ConfigDefinition -Config $Config -TemplateRows $PackageTemplateRows[$Partition])) {
-                            $StageConfigs[$Member.instance] = $Member
-                            $StageNumbers[$Member.instance] = $StageNumber
-                            $StageNames[$Member.instance] = $Stage.name
+                            & $AddStageConfig $Member $StageNumber $Stage.name
                         }
                         continue
                     }
-                    $StageConfigs[$Config.instance] = $Config
-                    $StageNumbers[$Config.instance] = $StageNumber
-                    $StageNames[$Config.instance] = $Stage.name
+                    & $AddStageConfig $Config $StageNumber $Stage.name
                 }
             }
 
-            foreach ($InstanceKey in $StageConfigs.Keys) {
-                if ($StandardName -and $InstanceKey -ne $StandardName) { continue }
-                $Config = $StageConfigs[$InstanceKey]
-                $Key = '{0}|{1}' -f $Domain, (& $IdentityFor $InstanceKey $Config.variables)
-                $Candidate = @{
-                    Rank      = $Rank
-                    Stage     = $StageNumbers[$InstanceKey]
-                    UpdatedAt = [int64]($Baseline.updatedAt ?? 0)
-                    Item      = [PSCustomObject]@{
-                        TenantFilter     = $Domain
-                        TenantName       = $State.tenantName
-                        Standard         = $InstanceKey
-                        BaseName         = ($InstanceKey -split '#')[0]
-                        TemplateId       = $Baseline.GUID
-                        TemplateName     = $Baseline.templateName
-                        Variables        = ($Config.variables ?? [PSCustomObject]@{})
-                        RemediateEnabled = [bool]$Config.remediateEnabled
-                        # 'Disable Alerts' on the baseline silences every standard in it,
-                        # regardless of the per-standard alert switches.
-                        AlertEnabled     = [bool]$Config.alertEnabled -and -not [bool]$Baseline.disableAlerts
-                        AlertOnRemediate = [bool]$Config.alertOnRemediate -and -not [bool]$Baseline.disableAlerts
-                        SourceScope      = $Scope
-                        # Package members attribute their origin so the alignment view
-                        # reads 'Baseline X (PackageName)' instead of hiding the bundle.
-                        SourceTemplate   = $(if ($Config.fromPackage) { '{0} ({1})' -f $Baseline.templateName, $Config.fromPackage } else { $Baseline.templateName })
-                        Stage            = $StageNumbers[$InstanceKey]
-                        StageName        = $StageNames[$InstanceKey]
-                        AlertEmails      = $Baseline.alertEmails
-                        AlertWebhookUrl  = $Baseline.alertWebhookUrl
-                        # 'Disable Scheduled Runs': the scheduled orchestrator skips these
-                        # items (but still counts them for reconciliation).
-                        DisableScheduledRuns = [bool]$Baseline.disableScheduledRuns
-                        Tiers            = @([PSCustomObject]@{
-                                templateName     = $Baseline.templateName
-                                assignedTo       = ($Baseline.assignedTenants -join ', ')
-                                variables        = ($Config.variables ?? [PSCustomObject]@{})
-                                remediateEnabled = [bool]$Config.remediateEnabled
-                                alertEnabled     = [bool]$Config.alertEnabled
-                                alertOnRemediate = [bool]$Config.alertOnRemediate
-                                effective        = $true
-                            })
+            foreach ($IdentityKey in $StageConfigs.Keys) {
+                foreach ($Config in $StageConfigs[$IdentityKey]) {
+                    $InstanceKey = "$($Config.instance ?? $Config.standard)"
+                    if ($StandardName -and $InstanceKey -notin $StandardName) { continue }
+                    $Key = '{0}|{1}' -f $Domain, $IdentityKey
+                    $Candidate = @{
+                        Rank      = $Rank
+                        Stage     = $StageNumbers[$IdentityKey]
+                        UpdatedAt = [int64]($Baseline.updatedAt ?? 0)
+                        Item      = [PSCustomObject]@{
+                            TenantFilter         = $Domain
+                            TenantName           = $State.tenantName
+                            Standard             = $InstanceKey
+                            BaseName             = ($InstanceKey -split '#')[0]
+                            TemplateId           = $Baseline.GUID
+                            SourceTemplateIds    = @($Baseline.GUID)
+                            TemplateName         = $Baseline.templateName
+                            Variables            = ($Config.variables ?? [PSCustomObject]@{})
+                            RemediateEnabled     = [bool]$Config.remediateEnabled
+                            AlertEnabled         = [bool]$Config.alertEnabled -and -not [bool]$Baseline.disableAlerts
+                            AlertOnRemediate     = [bool]$Config.alertOnRemediate -and -not [bool]$Baseline.disableAlerts
+                            SourceScope          = $Scope
+          
+                            SourceTemplate       = $(if ($Config.fromPackage) { '{0} ({1})' -f $Baseline.templateName, $Config.fromPackage } else { $Baseline.templateName })
+                            Stage                = $StageNumbers[$IdentityKey]
+                            StageName            = $StageNames[$IdentityKey]
+                            AlertEmails          = $Baseline.alertEmails
+                            AlertWebhookUrl      = $Baseline.alertWebhookUrl
+       
+                            DisableScheduledRuns = [bool]$Baseline.disableScheduledRuns
+                            Tiers                = @([PSCustomObject]@{
+                                    templateName     = $Baseline.templateName
+                                    assignedTo       = ($Baseline.assignedTenants -join ', ')
+                                    variables        = ($Config.variables ?? [PSCustomObject]@{})
+                                    remediateEnabled = [bool]$Config.remediateEnabled
+                                    alertEnabled     = [bool]$Config.alertEnabled
+                                    alertOnRemediate = [bool]$Config.alertOnRemediate
+                                    effective        = $true
+                                })
+                        }
                     }
-                }
-                $Candidate.Fingerprint = & $Fingerprint $Config.variables
+                    $Candidate.Fingerprint = & $Fingerprint $Config.variables
 
-                $Existing = $Effective[$Key]
-                if (-not $Existing -or $Candidate.Rank -gt $Existing.Rank) {
-                    # A more specific scope whole-value replaces everything below it -
-                    # including any conflict that existed at the lower rank.
-                    $Candidates = [System.Collections.Generic.List[object]]::new()
-                    $Candidates.Add($Candidate)
-                    $Effective[$Key] = @{ Rank = $Candidate.Rank; Candidates = $Candidates }
-                } elseif ($Candidate.Rank -eq $Existing.Rank) {
-                    $Twin = $Existing.Candidates | Where-Object { $_.Fingerprint -eq $Candidate.Fingerprint } | Select-Object -First 1
-                    if ($Twin) {
-                        # Identical settings from another baseline: dedupe. The strictest
-                        # request from EITHER baseline survives the merge - a wish to
-                        # remediate or alert always wins over report-only/muted. Both
-                        # sources stay visible in the inheritance tiers with their own
-                        # posture, so the merge is explainable in the UI.
-                        $Twin.Item.RemediateEnabled = [bool]($Twin.Item.RemediateEnabled -or $Candidate.Item.RemediateEnabled)
-                        $Twin.Item.AlertEnabled = [bool]($Twin.Item.AlertEnabled -or $Candidate.Item.AlertEnabled)
-                        $Twin.Item.AlertOnRemediate = [bool]($Twin.Item.AlertOnRemediate -or $Candidate.Item.AlertOnRemediate)
-                        $Twin.Item.SourceTemplate = @(@($Twin.Item.SourceTemplate -split ', ') + $Candidate.Item.TemplateName | Where-Object { $_ } | Select-Object -Unique) -join ', '
-                        $Twin.Item.Tiers = @(@($Twin.Item.Tiers) + @($Candidate.Item.Tiers) | Where-Object { $_ })
-                        if ($Candidate.UpdatedAt -gt $Twin.UpdatedAt) { $Twin.UpdatedAt = $Candidate.UpdatedAt }
-                    } else {
-                        # Same level, same identity, different settings: conflict.
-                        $Existing.Candidates.Add($Candidate)
+                    $Existing = $Effective[$Key]
+                    if (-not $Existing -or $Candidate.Rank -gt $Existing.Rank) {
+                        # A more specific scope whole-value replaces everything below it -
+                        # including any conflict that existed at the lower rank.
+                        $Candidates = [System.Collections.Generic.List[object]]::new()
+                        $Candidates.Add($Candidate)
+                        $Effective[$Key] = @{ Rank = $Candidate.Rank; Candidates = $Candidates }
+                    } elseif ($Candidate.Rank -eq $Existing.Rank) {
+                        $Twin = $Existing.Candidates | Where-Object { $_.Fingerprint -eq $Candidate.Fingerprint } | Select-Object -First 1
+                        if ($Twin) {
+                            $Keep, $Fold = $Twin, $Candidate
+                            # A scheduled baseline represents the shared item, so a manual-only twin cannot drop it from scheduled runs.
+                            if ($Twin.Item.DisableScheduledRuns -and -not $Candidate.Item.DisableScheduledRuns) {
+                                $Keep, $Fold = $Candidate, $Twin
+                                $Existing.Candidates[$Existing.Candidates.IndexOf($Twin)] = $Candidate
+                            }
+                            $Keep.Item.RemediateEnabled = [bool]($Keep.Item.RemediateEnabled -or $Fold.Item.RemediateEnabled)
+                            $Keep.Item.AlertEnabled = [bool]($Keep.Item.AlertEnabled -or $Fold.Item.AlertEnabled)
+                            $Keep.Item.AlertOnRemediate = [bool]($Keep.Item.AlertOnRemediate -or $Fold.Item.AlertOnRemediate)
+                            $Keep.Item.SourceTemplate = @(@($Keep.Item.SourceTemplate -split ', ') + @($Fold.Item.SourceTemplate -split ', ') | Where-Object { $_ } | Select-Object -Unique) -join ', '
+                            $Keep.Item.SourceTemplateIds = @(@($Keep.Item.SourceTemplateIds) + @($Fold.Item.SourceTemplateIds) | Select-Object -Unique)
+                            $Keep.Item.Tiers = @(@($Keep.Item.Tiers) + @($Fold.Item.Tiers) | Where-Object { $_ })
+                            if ($Fold.UpdatedAt -gt $Keep.UpdatedAt) { $Keep.UpdatedAt = $Fold.UpdatedAt }
+                        } else {
+                            # Same level, same identity, different settings: conflict.
+                            $Existing.Candidates.Add($Candidate)
+                        }
                     }
+                    # Lower rank than the current winner: ignored entirely.
                 }
-                # Lower rank than the current winner: ignored entirely.
             }
         }
     }
@@ -212,22 +222,23 @@ function Get-CIPPBaselineWorkItems {
     # Ad-hoc tenant overrides (templateId '') replace whatever a baseline resolved, or stand alone.
     $DeltaTable = Get-CippTable -tablename 'Baselines'
     $OverrideFilter = "PartitionKey eq 'standardItem' and templateId eq '' and scope eq 'tenant'"
+    $TenantLookup = Get-CIPPTenantLookup
     foreach ($Delta in @(Get-CIPPAzDataTableEntity @DeltaTable -Filter $OverrideFilter)) {
         if (-not $Delta) { continue }
-        if ($TenantFilter -and $Delta.scopeId -notin @($TenantFilter)) { continue }
-        if ($StandardName -and $Delta.standardName -ne $StandardName) { continue }
-        if ($TemplateId) { continue } # a baseline-scoped run never picks up ad-hoc overrides of other config
+        $OverrideTenant = $TenantLookup["$($Delta.scopeId)"].defaultDomainName ?? "$($Delta.scopeId)"
+        if ($TenantFilter -and $OverrideTenant -notin @($TenantFilter)) { continue }
+        if ($StandardName -and $Delta.standardName -notin $StandardName) { continue }
         $Variables = $(try { $Delta.expectedValue | ConvertFrom-Json -ErrorAction Stop } catch { [PSCustomObject]@{} }) ?? [PSCustomObject]@{}
         # An override targets a specific resolved instance: find the effective entry whose
         # winning item carries that instance key (identity-keyed entries included), and
         # only fall back to computing an identity when the override stands alone.
         $Key = $null
         foreach ($ExistingKey in @($Effective.Keys)) {
-            if ($ExistingKey -notlike "$($Delta.scopeId)|*") { continue }
+            if ($ExistingKey -notlike "$OverrideTenant|*") { continue }
             $KeyWinner = @($Effective[$ExistingKey].Candidates | Sort-Object -Property UpdatedAt -Descending)[0]
             if ($KeyWinner.Item.Standard -eq $Delta.standardName) { $Key = $ExistingKey; break }
         }
-        if (-not $Key) { $Key = '{0}|{1}' -f $Delta.scopeId, (& $IdentityFor $Delta.standardName $Variables) }
+        if (-not $Key) { $Key = '{0}|{1}' -f $OverrideTenant, (& $IdentityFor $Delta.standardName $Variables) }
         $Winning = if ($Effective[$Key]) { @($Effective[$Key].Candidates | Sort-Object -Property UpdatedAt -Descending)[0] } else { $null }
         $Tiers = [System.Collections.Generic.List[object]]::new()
         foreach ($Tier in @($Winning.Item.Tiers)) {
@@ -237,7 +248,7 @@ function Get-CIPPBaselineWorkItems {
         }
         $Tiers.Add([PSCustomObject]@{
                 templateName     = 'Tenant Override'
-                assignedTo       = $Delta.scopeId
+                assignedTo       = $OverrideTenant
                 variables        = $Variables
                 remediateEnabled = [bool]$Delta.remediateEnabled
                 alertEnabled     = [bool]$Delta.alertEnabled
@@ -251,11 +262,12 @@ function Get-CIPPBaselineWorkItems {
                 UpdatedAt   = [int64]($Delta.updatedAt ?? 0)
                 Fingerprint = & $Fingerprint $Variables
                 Item        = [PSCustomObject]@{
-                    TenantFilter     = $Delta.scopeId
-                    TenantName       = $Winning.Item.TenantName ?? $Delta.scopeId
+                    TenantFilter     = $OverrideTenant
+                    TenantName       = $Winning.Item.TenantName ?? $OverrideTenant
                     Standard         = $Delta.standardName
                     BaseName         = ($Delta.standardName -split '#')[0]
                     TemplateId       = ''
+                    SourceTemplateIds = @()
                     TemplateName     = 'Tenant Override'
                     Variables        = $Variables
                     RemediateEnabled = [bool]$Delta.remediateEnabled
@@ -277,7 +289,8 @@ function Get-CIPPBaselineWorkItems {
     # tenant's resolved set in hand before anything is emitted.
     $ResolvedItems = [System.Collections.Generic.List[object]]::new()
     foreach ($Entry in $Effective.Values) {
-        $Candidates = @($Entry.Candidates | Sort-Object -Property UpdatedAt -Descending)
+        # Scheduled baselines first, so the conflict row a scheduled run emits is never one it then drops as manual-only.
+        $Candidates = @($Entry.Candidates | Sort-Object -Property @{ Expression = { [bool]$_.Item.DisableScheduledRuns } }, @{ Expression = { $_.UpdatedAt }; Descending = $true })
         if ($Candidates.Count -le 1) {
             $ResolvedItems.Add($Candidates[0].Item)
             continue
@@ -299,6 +312,7 @@ function Get-CIPPBaselineWorkItems {
             }
         }
         $ConflictNames = @($Candidates | ForEach-Object { $_.Item.TemplateName } | Select-Object -Unique)
+        $ConflictIds = @($Candidates | ForEach-Object { $_.Item.SourceTemplateIds } | Select-Object -Unique)
         $EmittedKeys = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($ConflictCandidate in $Candidates) {
             if (-not $EmittedKeys.Add("$($ConflictCandidate.Item.Standard)")) { continue }
@@ -308,6 +322,7 @@ function Get-CIPPBaselineWorkItems {
             $ConflictItem.Tiers = @($ConflictTiers)
             # Attribute the row to every colliding baseline, not just its own source.
             $ConflictItem.SourceTemplate = ($ConflictNames -join ', ')
+            $ConflictItem.SourceTemplateIds = $ConflictIds
             $ConflictItem | Add-Member -NotePropertyMembers ([ordered]@{
                     Conflicted   = $true
                     ConflictWith = $ConflictNames
@@ -426,5 +441,8 @@ function Get-CIPPBaselineWorkItems {
         }
     }
 
-    foreach ($ResolvedItem in $ResolvedItems) { $ResolvedItem }
+    foreach ($ResolvedItem in $ResolvedItems) {
+        if ($TemplateId -and $TemplateId -notin $ResolvedItem.SourceTemplateIds) { continue }
+        $ResolvedItem
+    }
 }

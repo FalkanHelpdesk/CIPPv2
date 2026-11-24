@@ -1,4 +1,5 @@
 BeforeAll {
+    Add-Type -Path "$PSScriptRoot/../../Shared/CIPPSharp/bin/CIPPSharp.dll"
     . "$PSScriptRoot/../../Modules/CippExtensions/Public/Hudu/Get-HuduBitLockerKeySlot.ps1"
     . "$PSScriptRoot/../../Modules/CippExtensions/Public/Hudu/Get-HuduBitLockerSyncField.ps1"
     $Source = Get-Content -Raw "$PSScriptRoot/../../Modules/CippExtensions/Public/Hudu/Invoke-HuduExtensionSync.ps1"
@@ -13,6 +14,7 @@ BeforeAll {
         $Node.Clauses[0].Item1.Extent.Text -like '*!$ExistingAsset -or $ExistingAsset.Hash*'
     }, $true)
     $UpdateCondition = [ScriptBlock]::Create($UpdateIf.Clauses[0].Item1.Extent.Text)
+    function Get-CippExtensionDeviceBody { param($Model, $SyncedAt, $Culture, $TimeZone) 'device body' }
     function Get-CIPPLapsPassword { }
     function Get-CIPPBitLockerKey { }
     function Get-CippException { param($Exception) return [PSCustomObject]@{ NormalizedError = $Exception.Exception.Message } }
@@ -21,6 +23,8 @@ BeforeAll {
 Describe 'Hudu missing credential recovery' {
     BeforeEach {
         $Configuration = @{ IncludeLAPS = $false; IncludeBitLocker = $false }
+        $IncludeLAPS = $IncludeBitLocker = $false
+        $SyncPasswords = $true
         $TenantFilter = 'contoso.onmicrosoft.com'
         $Device = @{ operatingSystem = 'Windows'; azureADDeviceId = 'device-1' }
         $HuduDevice = @{ id = 1; fields = @(
@@ -32,6 +36,7 @@ Describe 'Hudu missing credential recovery' {
         $LAPSMetadataByDeviceId = @{ 'device-1' = @{ lastBackupDateTime = '2026-09-07T00:00:00Z' } }
         $BitLockerMetadataAvailable = $true
         $BitLockerKeyMetadata = @(@{ deviceId = 'device-1'; id = 'key-1'; volumeType = 1 })
+        $BitLockerKeysByDevice = [CIPP.CippIndex]::Build($BitLockerKeyMetadata, @(foreach ($Key in $BitLockerKeyMetadata) { , ($($Key.deviceId) ?? $null) }))
         $ExistingAsset = @{ Hash = 'unchanged' }
         $NewHash = 'unchanged'
         Mock Get-CIPPLapsPassword { @{ state = 'success'; accountName = 'Administrator'; copyField = 'test-password'; backupDateTime = '2026-09-07T00:00:00Z' } }
@@ -39,26 +44,26 @@ Describe 'Hudu missing credential recovery' {
     }
 
     It 'saves a recovered LAPS password when metadata and cached hash match' {
-        $Configuration.IncludeLAPS = $true
+        $Configuration.IncludeLAPS = $IncludeLAPS = $true
         . $CredentialBlock
         $DeviceAssetFields.laps_account | Should -Be '.\Administrator'
         $DeviceAssetFields.laps_password | Should -Be 'test-password'
-        $DeviceHashMaterial | Should -Match 'LAPS Account:Administrator'
-        $DeviceHashMaterial | Should -Not -Match 'LAPS Account:\.\\Administrator'
+        ($DeviceHashMaterial -join '') | Should -Match 'LAPS Account:Administrator'
+        ($DeviceHashMaterial -join '') | Should -Not -Match 'LAPS Account:\.\\Administrator'
         (& $UpdateCondition) | Should -BeTrue
         Should -Invoke Get-CIPPLapsPassword -Times 1 -Exactly
     }
 
     It 'does not duplicate an existing local-account prefix returned by Graph' {
-        $Configuration.IncludeLAPS = $true
+        $Configuration.IncludeLAPS = $IncludeLAPS = $true
         Mock Get-CIPPLapsPassword { @{ state = 'success'; accountName = '.\Administrator'; copyField = 'test-password'; backupDateTime = '2026-09-07T00:00:00Z' } }
         . $CredentialBlock
         $DeviceAssetFields.laps_account | Should -Be '.\Administrator'
-        $DeviceHashMaterial | Should -Match 'LAPS Account:Administrator'
+        ($DeviceHashMaterial -join '') | Should -Match 'LAPS Account:Administrator'
     }
 
     It 'migrates an existing bare account without retrieving its password' {
-        $Configuration.IncludeLAPS = $true
+        $Configuration.IncludeLAPS = $IncludeLAPS = $true
         $HuduDevice.fields += @{ label = 'LAPS Password'; value = 'present' }
         . $CredentialBlock
         $DeviceAssetFields.laps_account | Should -Be '.\Administrator'
@@ -67,7 +72,7 @@ Describe 'Hudu missing credential recovery' {
     }
 
     It 'retrieves and saves missing BitLocker keys when key IDs and hash match' {
-        $Configuration.IncludeBitLocker = $true
+        $Configuration.IncludeBitLocker = $IncludeBitLocker = $true
         . $CredentialBlock
         $DeviceAssetFields.bitlocker_os_drive_1_recovery_key | Should -Be 'test-key'
         (& $UpdateCondition) | Should -BeTrue
@@ -75,8 +80,8 @@ Describe 'Hudu missing credential recovery' {
     }
 
     It 'does not retrieve unchanged credentials that are already present' {
-        $Configuration.IncludeLAPS = $true
-        $Configuration.IncludeBitLocker = $true
+        $Configuration.IncludeLAPS = $IncludeLAPS = $true
+        $Configuration.IncludeBitLocker = $IncludeBitLocker = $true
         $HuduDevice.fields[0].value = '.\Administrator'
         $HuduDevice.fields += @{ label = 'LAPS Password'; value = 'present' }
         $HuduDevice.fields += @{ label = 'BitLocker OS Drive 1 Recovery Key'; value = 'present' }

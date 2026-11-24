@@ -6,10 +6,6 @@ description: Create, import, run and manage the baselines applied to your tenant
 
 Every baseline you have created or imported is listed here, with the standards it carries, the tenants it is assigned to, and how far each tenant has progressed through its stages. This is where baselines are added, edited, run on demand, shared, and removed.
 
-{% hint style="warning" %}
-Baselines is in beta. Behaviour and screens are still changing between releases.
-{% endhint %}
-
 ## Action Buttons
 
 <details>
@@ -40,6 +36,8 @@ The flyout previews every template it found and pre-selects the ones it can conv
 | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Import everything as report-only (recommended)                                                                             | Brings every standard across with automatic fixing switched off, so you can review the results before letting CIPP change anything. Re-enable it per standard afterwards. |
 | Migrated drift templates should also alert on Intune and Conditional Access policies that were not created from a template | Adds detection of policies that exist in the tenant but were never deployed from a template, so they surface as deviations.                                               |
+
+Tenant overrides cannot be prepared before migrating. Import as report-only, create the overrides you need from the [Alignment](alignment.md) page, then turn on automatic fixing.
 
 Each template in the list carries a status.
 
@@ -81,6 +79,6 @@ Selecting a row opens the **Baseline Details** flyout. Alongside those values it
 
 ## Table Actions
 
-<table><thead><tr><th>Action</th><th>Description</th><th data-type="checkbox">Bulk Action Available</th></tr></thead><tbody><tr><td>Edit Baseline</td><td>Opens the baseline in the editor.</td><td>false</td></tr><tr><td>Clone &#38; Edit Baseline</td><td>Opens a copy of the baseline in the editor, leaving the original untouched until you save the copy.</td><td>false</td></tr><tr><td>Run Baseline Now</td><td>Runs the baseline immediately against a single covered tenant, or against every tenant it is assigned to. Standards sitting in report-only stages are compared without anything being changed.</td><td>true</td></tr><tr><td>Save to GitHub</td><td>Uploads the baseline, and every Conditional Access and Intune template it references, to a repository you have write access to. Template packages are expanded to their current members, and tenant assignments are replaced with a placeholder. Greyed out unless the GitHub integration is enabled.</td><td>true</td></tr><tr><td>Delete Baseline</td><td>Removes the baseline. Its standards stop being applied to the assigned tenants from the next run onwards.</td><td>true</td></tr><tr><td>More Info</td><td>Opens the Extended Info flyout with the full details for the selected row.</td><td>false</td></tr></tbody></table>
+<table><thead><tr><th>Action</th><th>Description</th><th data-type="checkbox">Bulk Action Available</th></tr></thead><tbody><tr><td>Edit Baseline</td><td>Opens the baseline in the editor.</td><td>false</td></tr><tr><td>Clone &#38; Edit Baseline</td><td>Opens a copy of the baseline in the editor, leaving the original untouched until you save the copy.</td><td>false</td></tr><tr><td>Run Baseline Now</td><td>Runs the baseline immediately against a single covered tenant, or against every tenant it is assigned to. Standards sitting in report-only stages are compared without anything being changed. The baseline's own configuration is applied as it stands: settings from other assigned baselines, even more specific ones, and tenant overrides are ignored for this run.</td><td>true</td></tr><tr><td>Save to GitHub</td><td>Uploads the baseline, and every Conditional Access and Intune template it references, to a repository you have write access to. Template packages are expanded to their current members, and tenant assignments are replaced with a placeholder. Greyed out unless the GitHub integration is enabled.</td><td>true</td></tr><tr><td>Delete Baseline</td><td>Removes the baseline. Its standards stop being applied to the assigned tenants from the next run onwards.</td><td>true</td></tr><tr><td>More Info</td><td>Opens the Extended Info flyout with the full details for the selected row.</td><td>false</td></tr></tbody></table>
 
 {% include "../../../../.gitbook/includes/feature-request.md" %}

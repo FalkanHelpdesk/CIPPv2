@@ -23,6 +23,19 @@ Cached mode also adds a **Cache Timestamp** column so you can see how old the da
 AllTenants always uses cached data, even on pages that otherwise allow the toggle. The **Sync** button is disabled under AllTenants unless the page explicitly supports syncing every tenant at once.
 {% endhint %}
 
+### Tenant Coverage
+
+On some pages, AllTenants data is gathered tenant by tenant, and a coverage chip beside the data source controls shows how many tenants the cached data covers, for example `42 of 45 tenants`. The chip turns amber while some tenants are missing, and hovering over it says whether more are still loading. Once every tenant is covered, it shows the total on its own.
+
+Next to the chip, a **Sync** button offers two options:
+
+| Option               | Description                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| Load missing tenants | Gathers data only for the tenants not yet covered. Greyed out once every tenant is covered.        |
+| Reload all tenants   | Gathers fresh data for every tenant, replacing what is cached.                                    |
+
+**Sync** is greyed out while a load is already running, and a queue tracker beside it shows the progress.
+
 ## Toolbar
 
 The toolbar sits above every table and holds the search box, filtering, column selection and export controls.
@@ -102,7 +115,7 @@ Below roughly 900px, tables are presented as a list of cards rather than as a ta
 
 Most tables include an **Actions** column pinned to the right of the table. Clicking the ellipsis in a row opens the actions available for that row.
 
-Ticking the checkboxes at the left of one or more rows shows a count of the selected rows in the toolbar along with a **Bulk Actions** button, which applies a single action to every row you have selected. Only actions that support bulk operation appear in this menu. Where an action only applies to certain rows, the selection is narrowed automatically to the eligible ones.
+Ticking the checkboxes at the left of one or more rows shows a count of the selected rows in the toolbar along with a **Bulk Actions** button, which applies a single action to every row you have selected. Only actions that support bulk operation appear in this menu. Where an action only applies to certain rows, the selection is narrowed automatically to the eligible ones. Where an action is sent one row at a time, a row that fails is reported with its error alongside the rows that succeeded, and the remaining rows are still processed.
 
 The selection checkbox column is pinned to the left and the actions column to the right, so both stay visible as you scroll horizontally. The column headers remain fixed as you scroll vertically.
 

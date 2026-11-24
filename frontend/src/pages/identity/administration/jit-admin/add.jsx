@@ -707,6 +707,7 @@ const Page = () => {
                   { label: 'Webhook', value: 'Webhook' },
                   { label: 'Email', value: 'email' },
                   { label: 'PSA', value: 'PSA' },
+                  { label: 'Push (notify me)', value: 'Push' },
                 ]}
                 formControl={formControl}
               />
@@ -794,6 +795,6 @@ const Page = () => {
   )
 }
 
-Page.getLayout = (page) => <DashboardLayout>{page}</DashboardLayout>
+Page.getLayout = (page) => <DashboardLayout usesTenant={false}>{page}</DashboardLayout>
 
 export default Page

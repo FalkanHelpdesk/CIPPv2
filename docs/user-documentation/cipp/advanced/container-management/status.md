@@ -1,6 +1,6 @@
 # Status & Updates
 
-The Status & Updates page lets you view and manage the CIPP application container on a self-hosted instance. From here you can see which image and version are running, control the release channel, configure automatic update checks, and restart the container.
+The Status & Updates page lets you view and manage the CIPP application container, on both self-hosted and CyberDrain-hosted instances. From here you can see which image and version are running, control the release channel, configure automatic update checks, and restart the container.
 
 The page is laid out top to bottom: a status strip summarising the running container, any notices that need action, a row of action buttons, and two settings cards.
 
@@ -93,13 +93,27 @@ Unless you have been asked to test a specific build, stay on Latest (Stable).
 
 This card configures how often CIPP asks the container registry whether a newer image has been published on your channel. By default, it checks every hour and auto-restarts at 23:00.
 
-| Setting                                 | Description                                                                                                            |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Check Interval                          | How often CIPP checks the registry for a new image: Disabled, Every hour, Every 4 hours, Every 12 hours, or Every day. |
-| Preferred Check Time                    | The hour of the day, in 24-hour time, at which the check should run.                                                   |
-| Auto-restart when an update is detected | When enabled, CIPP automatically restarts the container to apply an update once one is found.                          |
+| Setting                                 | Description                                                                                                                                  |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Check Interval                          | How often CIPP checks the registry for a new image: Disabled, Every hour, Every 4 hours, Every 12 hours, or Every day.                       |
+| Preferred Restart Time                  | The hour of the day, in 24-hour time, at which the check runs and, with auto-restart on, the container restarts to apply an update it finds. |
+| Auto-restart when an update is detected | When enabled, CIPP automatically restarts the container to apply an update once one is found.                                                |
 
 Select **Save Settings** to store these options. Setting Check Interval to **Disabled** turns off scheduled checks and disables the other two settings, as neither has any effect without them; you can still check on demand with **Check for Updates**.
+
+### Provenance
+
+Every check also verifies the newest image on your channel: its signed build attestation is fetched from the registry and checked against the release workflow of the repository the image came from. The **Latest on this channel** panel shows the result whether or not an update is pending, and an update is only applied automatically when it passes:
+
+| Result       | Meaning                                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Verified     | The image was built and signed by the expected CI workflow. Auto-restart proceeds as configured.                                                      |
+| Failed       | No attestation was found, or it did not match. With an update pending, auto-restart is withheld, a warning is logged and the restart dialog warns you; when already up to date the result is simply shown.  |
+| Unverifiable | The attestation could not be checked, for example a registry error or a private fork signed by a certificate authority CIPP does not carry. The check retries next interval. |
+
+Verified says who built the image, not who reviewed it. On the **dev** and **nightly** channels it shows as **Verified · Dev**: those images are built from the dev branch, which accepts direct pushes before release review. Branch builds show **Verified · Preview**. Only **latest** is built from a release tag on main, where pull requests are required, and shows plain **Verified**. The Release Channel card shows a warning when a dev or nightly channel is selected.
+
+See [verifying-container-images.md](../../../../security/cipp-security-and-compliance/verifying-container-images.md "mention") for how to verify an image yourself and what to do when building from a fork.
 
 Note that if the container restarts for any reason, the latest image for the current release channel is pulled regardless of these settings.
 

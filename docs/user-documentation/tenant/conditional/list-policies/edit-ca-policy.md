@@ -81,6 +81,12 @@ Targets applications by attribute rather than by name, which keeps the policy cu
 | Device Filter Mode | Whether devices matching the rule are included or excluded.                |
 | Device Filter Rule | The filter expression, for example `device.extensionAttribute1 -eq "SAW"`. |
 
+### Authentication Flows
+
+| Field                                | Description                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Authentication Flow Transfer Methods | The authentication flows the policy applies to: **Device code flow**, **Authentication transfer**, or both. |
+
 ### Risk Levels
 
 Marked in the interface as requiring **Entra ID P2**.
@@ -91,12 +97,6 @@ Marked in the interface as requiring **Entra ID P2**.
 | User Risk Levels              | Risk levels for the account itself that trigger the policy.  |
 | Service Principal Risk Levels | Risk levels for workload identities that trigger the policy. |
 | Insider Risk Levels           | Insider risk levels that trigger the policy.                 |
-
-### Authentication Flows
-
-| Field                                | Description                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------------------------ |
-| Authentication Flow Transfer Methods | The authentication transfer methods the policy applies to, such as device code flow. |
 
 ### Workload Identities
 
@@ -140,6 +140,8 @@ Collapsed by default, since most policies do not use these.
 | Enable Persistent Browser        | Controls whether the browser session persists across restarts.                                                                 |
 | Persistence Mode                 | Whether sessions are always persistent or never persistent.                                                                    |
 | Disable Resilience Defaults      | Stops Entra extending existing sessions during an outage. Leaving resilience defaults on is the safer choice for most tenants. |
+| Enable Security Profile          | Applies a Global Secure Access web content filtering security profile. Needs a Microsoft Entra Internet Access licence. |
+| Security profile                 | One of this tenant's [security profiles](../../gsa/security-profiles/README.md). |
 
 {% hint style="info" %}
 Saving writes the policy as the editor shows it rather than merging with what the tenant already had. Anything you clear here, whether an exclusion, a platform condition or a session control, is cleared on the policy itself.

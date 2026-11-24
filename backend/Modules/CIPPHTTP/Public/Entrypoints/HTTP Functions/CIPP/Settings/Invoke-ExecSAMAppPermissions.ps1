@@ -10,6 +10,7 @@ function Invoke-ExecSAMAppPermissions {
 
     $User = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Request.Headers.'x-ms-client-principal')) | ConvertFrom-Json
 
+    $StatusCode = [HttpStatusCode]::OK
     switch ($Request.Query.Action) {
         'Update' {
             try {
@@ -18,8 +19,8 @@ function Invoke-ExecSAMAppPermissions {
 
                 # Persist the full applied set = manifest base ∪ submitted extras, so the AppPermissions
                 # table always reflects everything the CIPP-SAM app should have (the manifest is always
-                # applied and cannot be removed). The grant flow reads this table when applying
-                # permissions to the service principal, which is what the permission check diffs against.
+                # applied and cannot be removed). Get-CippSamPermissions diffs the manifest against this
+                # table to decide when a Permissions repair is needed.
                 $Applied = @{}
                 $AppIds = @(@($ManifestPermissions.PSObject.Properties.Name) + @($Submitted.PSObject.Properties.Name)) | Where-Object { $_ } | Sort-Object -Unique
                 foreach ($AppId in $AppIds) {
@@ -68,6 +69,7 @@ function Invoke-ExecSAMAppPermissions {
                 }
                 Write-LogMessage -headers $Request.Headers -API 'ExecSAMAppPermissions' -message 'CIPP-SAM permissions updated' -Sev 'Info' -LogData $Applied
             } catch {
+                $StatusCode = [HttpStatusCode]::InternalServerError
                 $Body = @{
                     'Results' = $_.Exception.Message
                 }
@@ -85,6 +87,7 @@ function Invoke-ExecSAMAppPermissions {
                 }
                 Write-LogMessage -headers $Request.Headers -API 'ExecSAMAppPermissions' -message 'CIPP-SAM permissions reset to CIPP defaults' -Sev 'Info'
             } catch {
+                $StatusCode = [HttpStatusCode]::InternalServerError
                 $Body = @{
                     'Results' = $_.Exception.Message
                 }
@@ -97,7 +100,7 @@ function Invoke-ExecSAMAppPermissions {
 
 
     return ([HttpResponseContext]@{
-            StatusCode = [HttpStatusCode]::OK
+            StatusCode = $StatusCode
             Body       = ConvertTo-Json -Depth 10 -InputObject $Body
         })
 

@@ -75,6 +75,12 @@ Targets applications by attribute rather than by name, which keeps the policy cu
 | Device Filter Mode | Whether devices matching the rule are included or excluded.                |
 | Device Filter Rule | The filter expression, for example `device.extensionAttribute1 -eq "SAW"`. |
 
+### Authentication Flows
+
+| Field                                | Description                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Authentication Flow Transfer Methods | The authentication flows the policy applies to: **Device code flow**, **Authentication transfer**, or both. |
+
 ### Risk Levels
 
 {% hint style="warning" %}
@@ -87,12 +93,6 @@ These require **Entra ID P2**. Usage of these without proper licensing could ris
 | User Risk Levels              | Risk levels for the account itself that trigger the policy.  |
 | Service Principal Risk Levels | Risk levels for workload identities that trigger the policy. |
 | Insider Risk Levels           | Insider risk levels that trigger the policy.                 |
-
-### Authentication Flows
-
-| Field                                | Description                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------------------------ |
-| Authentication Flow Transfer Methods | The authentication transfer methods the policy applies to, such as device code flow. |
 
 ### Workload Identities
 
@@ -138,6 +138,10 @@ Collapsed by default, since most policies do not use these.
 | Enable Persistent Browser        | Controls whether the browser session persists across restarts.                                                                 |
 | Persistence Mode                 | Whether sessions are always persistent or never persistent.                                                                    |
 | Disable Resilience Defaults      | Stops Entra extending existing sessions during an outage. Leaving resilience defaults on is the safer choice for most tenants. |
+| Enable Security Profile          | Applies a Global Secure Access web content filtering security profile. Needs a Microsoft Entra Internet Access licence in each tenant. |
+| Security profile template or profile name | Pick a [security profile template](../../gsa/security-profiles/templates.md) to deploy the profile, and its filtering policies, with the policy. Or type the name of a security profile each tenant already has, choosing **Add option**, and deployment uses the profile of that name. |
+
+In a baseline, a template that applies a security profile is graded by the profile name, and tenants without a Microsoft Entra Internet Access licence are reported as **Skipped - No License** instead of drifting.
 
 ## Named Locations
 
@@ -149,6 +153,8 @@ Use **Add Named Location** to add an entry, and the delete icon on any entry to 
 | ------------- | ------------------------------------------------------------------------------------ |
 | Display Name  | The name of the location. This is the name you reference under Conditions. Required. |
 | Location Type | Either Countries / Regions or IP Ranges. Required.                                   |
+
+Countries and IP ranges can come from a List variable per tenant; see the example under Custom Variables.
 
 ### IP Ranges
 
@@ -189,8 +195,46 @@ Substitution happens before CIPP matches names in the target tenant, so a named 
 
 Values are set for every tenant in [global-variables.md](../../administration/tenants/global-variables.md "mention"), or for one tenant in the Custom Variables box on [edit.md](../../manage/edit.md "mention"), where the tenant's own value wins.
 
+A **List** variable used in Include or Exclude Users, Groups or Locations expands into one entry per value, so a single `%breakglassaccounts%` can exclude two accounts in one tenant and three in another. User, group and location values may be display names: names are resolved to IDs in the target tenant on deployment, whichever group and user option is chosen in the deploy drawer, and a location name is matched to the tenant's existing named location when the template does not define it. A name that matches nothing stops the deployment with an error naming it, rather than being dropped.
+
+For example, a policy that blocks sign-ins from outside a client's countries and offices embeds two named locations and excludes both under Conditions. Their values come from List variables rather than being typed into the template:
+
+| Named Location    | Type                | Field               | Value                |
+| ----------------- | ------------------- | ------------------- | -------------------- |
+| Allowed Countries | Countries / Regions | Countries / Regions | `%allowedcountries%` |
+| Office IPs        | IP Ranges           | IP Ranges           | `%officeips%`        |
+
+Each tenant then sets its own values, one per line. `allowedcountries` takes two-letter country codes:
+
+```
+NL
+BE
+```
+
+and `officeips` takes CIDR ranges, IPv4 or IPv6:
+
+```
+203.0.113.0/24
+198.51.100.10/32
+```
+
+On deployment each tenant's locations are created, or updated in place, with that tenant's countries and ranges, so one template covers every client. Changing a tenant's variable takes effect on the next deployment or standard run.
+
+### Optional per-tenant exclusions
+
+An empty List removes its entry, so a List can also hold exclusions that only some tenants have. For example, a policy that blocks sign-ins from known bad networks for every client, where a few clients need their own allowed ranges on top of the shared ones:
+
+1. On [global-variables.md](../../administration/tenants/global-variables.md "mention"), add a variable named `clientallowlocations` with the type **List** and the value `[]`. Every tenant now has an empty list by default.
+2. In the template, define the shared locations under **Named Locations**, for example `Block Infra Block` and `Block Infra Allow`. Under Conditions, include `Block Infra Block` and exclude both `Block Infra Allow` and `%clientallowlocations%`. Do not define the per-client location in the template.
+3. For each client that needs an exception, create its named location in that tenant, for example `Block Infra CLIENT Allow`, with the client's ranges.
+4. In the Custom Variables box on that tenant's [edit.md](../../manage/edit.md "mention") page, use **Override for this tenant** on `clientallowlocations` and enter the location's name. Enter one name per line if there is more than one.
+
+A tenant without an override deploys the policy excluding only `Block Infra Allow`. A tenant with one also excludes its own location, which is matched by name because the template does not define it. CIPP never overwrites that location, so each client's ranges are managed in its own tenant.
+
+Type `%` in the Users, Groups and Locations fields to pick from the [variable-auto-complete.md](../../../shared-features/variable-auto-complete.md "mention") list.
+
 {% hint style="warning" %}
-The fields in this editor do not offer the [variable-auto-complete.md](../../../shared-features/variable-auto-complete.md "mention") list, so the variable name has to be typed in full. A name that matches nothing for the tenant being deployed to is left in place as literal text, which is covered under Unresolved Variables on [global-variables.md](../../administration/tenants/global-variables.md "mention").
+A variable with no value for the tenant being deployed to stops the deployment with an error naming it. See Unresolved Variables on [global-variables.md](../../administration/tenants/global-variables.md "mention").
 {% endhint %}
 
 {% include "../../../../../.gitbook/includes/feature-request.md" %}

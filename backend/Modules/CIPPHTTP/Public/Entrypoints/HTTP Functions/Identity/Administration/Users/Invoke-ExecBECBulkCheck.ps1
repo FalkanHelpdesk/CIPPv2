@@ -7,7 +7,7 @@ function Invoke-ExecBECBulkCheck {
     .SYNOPSIS
         Queues Business Email Compromise investigations for many users at once.
     .DESCRIPTION
-        Queues one BEC investigation per user as a single orchestration with a queue entry for progress. Accepts either an array of { UserIds, tenantFilter } items (the Users table bulk action) or one object with UserIds[]. Each run gets its own case id; results appear on the BEC Reports page and each user's Compromise Remediation tab.
+        Queues one BEC investigation per user, each its own sequential orchestration, with a queue entry for progress. Accepts either an array of { UserIds, tenantFilter } items (the Users table bulk action) or one object with UserIds[]. An optional windowDays (1-30) sets how many days of history every run covers, ending now; omitted, a run covers 7 days, or 30 when the user holds Entra ID P1/P2. Each run gets its own case id; results appear on the BEC Reports page and each user's Compromise Remediation tab.
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
@@ -24,6 +24,10 @@ function Invoke-ExecBECBulkCheck {
         # object ids of the users to investigate
         $UserIds = @($Entries | ForEach-Object { @($_.UserIds) } | Where-Object { $_ } | ForEach-Object { [string](& $Unwrap $_) } | Where-Object { $_ } | Select-Object -Unique)
         if ($UserIds.Count -eq 0) { throw 'No users to check' }
+        # Days of history every run covers, ending now (1-30); omitted = 7 days, or 30 when the user holds Entra ID P1/P2
+        $WindowRaw = [string](& $Unwrap ($Entries | ForEach-Object { $_.windowDays } | Where-Object { $_ } | Select-Object -First 1))
+        $WindowDays = $WindowRaw -as [int]
+        if (-not [string]::IsNullOrWhiteSpace($WindowRaw) -and ($null -eq $WindowDays -or $WindowDays -lt 1 -or $WindowDays -gt 30)) { throw 'windowDays must be a whole number of days between 1 and 30' }
 
         # Resolve UPN and display name in chunks of 15 ids
         $Resolved = @{}
@@ -39,7 +43,7 @@ function Invoke-ExecBECBulkCheck {
         # the technician's own address (first x-forwarded-for hop) is never the user's or the attacker's
         $RequestedFromIP = ConvertTo-CIPPBecHostAddress -Address ([string](([string]$Headers.'x-forwarded-for' -split ',')[0])).Trim()
         $Queue = New-CippQueueEntry -Name "BEC investigation - $TenantFilter" -Link "/identity/administration/bec?tenantFilter=$TenantFilter" -Reference "bec-$TenantFilter-$([guid]::NewGuid().ToString('N'))" -TotalTasks $UserIds.Count
-        $Batch = [System.Collections.Generic.List[object]]::new()
+        $Runs = [System.Collections.Generic.List[object]]::new()
         $Cases = [System.Collections.Generic.List[object]]::new()
         foreach ($UserId in $UserIds) {
             $User = $Resolved[$UserId]
@@ -47,21 +51,17 @@ function Invoke-ExecBECBulkCheck {
                 $Cases.Add([pscustomobject]@{ UserId = $UserId; UserPrincipalName = $null; CaseId = $null; Error = 'User not found' })
                 continue
             }
-            $Prepared = New-CIPPBecRunRequest -TenantFilter $TenantFilter -UserId ([string]$User.id) -UserPrincipalName ([string]$User.userPrincipalName) -DisplayName ([string]$User.displayName) -RequestedBy ([string]$RequestedBy) -QueueId ([string]$Queue.RowKey) -RequestedFromIP ([string]$RequestedFromIP)
-            $Batch.Add($Prepared.Item)
+            $Prepared = New-CIPPBecRunRequest -TenantFilter $TenantFilter -UserId ([string]$User.id) -UserPrincipalName ([string]$User.userPrincipalName) -DisplayName ([string]$User.displayName) -RequestedBy ([string]$RequestedBy) -QueueId ([string]$Queue.RowKey) -RequestedFromIP ([string]$RequestedFromIP) -WindowDays ([int]$WindowDays)
+            $Runs.Add($Prepared.InputObject)
             $Cases.Add([pscustomobject]@{ UserId = [string]$User.id; UserPrincipalName = [string]$User.userPrincipalName; CaseId = $Prepared.CaseId })
         }
-        if ($Batch.Count -eq 0) { throw 'None of the selected users could be resolved' }
+        if ($Runs.Count -eq 0) { throw 'None of the selected users could be resolved' }
         $Unresolved = @($Cases | Where-Object { $_.Error } | ForEach-Object { $_.UserId })
-        $InputObject = [PSCustomObject]@{
-            OrchestratorName = 'BECRunOrchestrator'
-            Batch            = @($Batch)
-            SkipLog          = $true
-        }
-        $null = Start-CIPPOrchestrator -InputObject $InputObject
-        Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Queued $($Batch.Count) BEC investigation(s) (queue $($Queue.RowKey))" -Sev 'Info'
+        # one orchestration per investigation: its phases run in order, the investigations side by side
+        foreach ($Run in $Runs) { $null = Start-CIPPOrchestrator -InputObject $Run }
+        Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Queued $($Runs.Count) BEC investigation(s) (queue $($Queue.RowKey))" -Sev 'Info'
         $Body = @{
-            Results = "Queued $($Batch.Count) BEC investigation(s). Results appear on the BEC Reports page and each user's Compromise Remediation tab.$(if ($Unresolved.Count -gt 0) { " $($Unresolved.Count) selected user(s) could not be found and were skipped: $($Unresolved -join ', ')." })"
+            Results = "Queued $($Runs.Count) BEC investigation(s). Results appear on the BEC Reports page and each user's Compromise Remediation tab.$(if ($Unresolved.Count -gt 0) { " $($Unresolved.Count) selected user(s) could not be found and were skipped: $($Unresolved -join ', ')." })"
             QueueId = $Queue.RowKey
             Cases   = @($Cases)
         }

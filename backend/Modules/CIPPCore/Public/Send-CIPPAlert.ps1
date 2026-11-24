@@ -17,11 +17,18 @@ function Send-CIPPAlert {
         $RowKey = [string][guid]::NewGuid(),
         $Attachments,
         $AffectedUser,
+        # Device the alert is about: IntuneId and/or EntraDeviceId and/or SerialNumber, DisplayName. PSA extensions that
+        # can attach a device use it; the others ignore it.
+        $AffectedDevice,
         $PsaTicketPriority,
         $PSAReference,
         $PSATicketId,
         $PSAConsolidationKey,
-        [switch]$UseStandardizedSchema
+        [switch]$UseStandardizedSchema,
+        # push only: the CIPP user (UPN) whose registered devices receive it
+        $TargetUser,
+        $PushMessage,
+        $Url
     )
     Write-Information 'Shipping Alert'
     $Table = Get-CIPPTable -TableName SchedulerConfig
@@ -30,6 +37,48 @@ function Send-CIPPAlert {
 
     if ($HTMLContent) {
         $HTMLContent = Get-CIPPTextReplacement -TenantFilter $TenantFilter -Text $HTMLContent
+    }
+
+    if ($Type -eq 'push') {
+        if ([string]::IsNullOrWhiteSpace($TargetUser)) { return 'No target user for push notification' }
+        $SubTable = Get-CIPPTable -tablename 'PushSubscriptions'
+        $Subscriptions = @(Get-CIPPAzDataTableEntity @SubTable -Filter "PartitionKey eq '$TargetUser'")
+        if ($Subscriptions.Count -eq 0) { return "No push devices registered for $TargetUser" }
+
+        $Keys = Get-CIPPVapidKeys
+        $CippConfigTable = Get-CIPPTable -tablename 'Config'
+        $CippUrl = (Get-CIPPAzDataTableEntity @CippConfigTable -Filter "PartitionKey eq 'InstanceProperties' and RowKey eq 'CIPPURL'").Value
+        $Subject = if ($CippUrl) { "https://$CippUrl" } else { 'mailto:noreply@cipp.app' }
+        $Payload = @{
+            title = if ($Title) { "$Title" } else { 'CIPP' }
+            body  = "$PushMessage"
+            url   = if ($Url) { "$Url" } else { '/' }
+        } | ConvertTo-Json -Compress
+
+        $Sent = 0
+        $Pruned = 0
+        foreach ($Sub in $Subscriptions) {
+            try {
+                if ($PSCmdlet.ShouldProcess($Sub.DeviceName, 'Sending push notification')) {
+                    $Result = [CIPP.WebPush]::Send($Sub.Endpoint, $Sub.P256dh, $Sub.Auth, $Payload, $Keys.PublicKey, $Keys.PrivateKey, $Subject, 86400)
+                    if ($Result.IsSuccess) {
+                        $Sent++
+                    } elseif ($Result.IsGone) {
+                        # The browser dropped the subscription; the row is dead weight.
+                        Remove-AzDataTableEntity @SubTable -Entity $Sub -Force | Out-Null
+                        $Pruned++
+                        Write-LogMessage -API $APIName -message "Removed expired push subscription '$($Sub.DeviceName)' for $TargetUser (push service returned HTTP $($Result.StatusCode): $($Result.Content))" -Sev 'Info'
+                    } else {
+                        Write-LogMessage -API $APIName -message "Push to '$($Sub.DeviceName)' for $TargetUser failed with HTTP $($Result.StatusCode): $($Result.Content)" -Sev 'Warning'
+                    }
+                }
+            } catch {
+                Write-LogMessage -API $APIName -message "Push to '$($Sub.DeviceName)' for $TargetUser failed: $($_.Exception.Message)" -Sev 'Warning'
+            }
+        }
+        $Summary = "Push sent to $Sent of $($Subscriptions.Count) device(s) for $TargetUser"
+        if ($Pruned) { $Summary = "$Summary ($Pruned expired subscription(s) removed)" }
+        return $Summary
     }
 
     if ($Type -eq 'email') {
@@ -67,9 +116,11 @@ function Send-CIPPAlert {
                 }
 
                 # Add file attachments if provided. sendMail rejects a request body over 4MB, so attach in
-                # order (the report PDF comes first) and omit whatever no longer fits.
+                # order (the report PDF comes first); whatever no longer fits is uploaded to blob storage and
+                # linked from the body instead, or omitted if the upload fails. The links fit in the 64KB slack.
                 if ($Attachments -and $Attachments.Count -gt 0) {
                     $Budget = 4MB - 64KB - [System.Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -Compress -Depth 10 -InputObject $PowerShellBody))
+                    $DownloadLinks = [System.Collections.Generic.List[string]]::new()
                     $FittingAttachments = @($Attachments | ForEach-Object {
                         $Size = ([string]$_.ContentBytes).Length + 512
                         if ($Size -le $Budget) {
@@ -81,11 +132,20 @@ function Send-CIPPAlert {
                                 contentBytes   = $_.ContentBytes
                             }
                         } else {
-                            Write-Information "Omitting attachment $($_.Name) from '$Title': too large for sendMail"
+                            $Attachment = $_
+                            try {
+                                $Url = New-CIPPReportAttachmentLink -Name $Attachment.Name -ContentBytes $Attachment.ContentBytes -ContentType $Attachment.ContentType
+                                $DownloadLinks.Add("<li><a href=`"$([System.Net.WebUtility]::HtmlEncode($Url))`">$([System.Net.WebUtility]::HtmlEncode($Attachment.Name))</a></li>")
+                            } catch {
+                                Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "Omitting attachment $($Attachment.Name) from '$Title': too large for email and the blob upload failed: $($_.Exception.Message)" -sev Warning
+                            }
                         }
                     })
                     if ($FittingAttachments.Count -gt 0) {
                         $PowerShellBody.message.attachments = $FittingAttachments
+                    }
+                    if ($DownloadLinks.Count -gt 0) {
+                        $PowerShellBody.message.body.content = "$HTMLContent<p>The following attachment(s) were too large to attach to this email. Download them directly here:</p><ul>$($DownloadLinks -join '')</ul>"
                     }
                 }
 
@@ -256,6 +316,14 @@ function Send-CIPPAlert {
         try {
             if (![string]::IsNullOrWhiteSpace($Config.webhook) -or ![string]::IsNullOrWhiteSpace($AltWebhook)) {
                 $webhook = if ($AltWebhook) { $AltWebhook } else { $Config.webhook }
+                Assert-CIPPWebhookDestination -Uri $webhook
+                # Configured headers must not be able to pose as a signed-in user or a proxy to the receiver.
+                foreach ($HeaderName in @($RequestHeaders.Keys)) {
+                    if ($HeaderName -match '^(x-ms-client-principal|x-forwarded-|host$)') {
+                        $RequestHeaders.Remove($HeaderName)
+                        Write-LogMessage -API 'Webhook Alerts' -message "Webhook header '$HeaderName' is not allowed and was not sent." -tenant $TenantFilter -sev warning
+                    }
+                }
                 if ($PSCmdlet.ShouldProcess($webhook, 'Sending webhook')) {
                     $RestMethod = @{
                         Uri                = $webhook
@@ -263,7 +331,11 @@ function Send-CIPPAlert {
                         ContentType        = 'application/json'
                         StatusCodeVariable = 'WebhookStatusCode'
                         SkipHttpErrorCheck = $true
+                        # Redirects are followed by hand below so every hop gets the destination check.
+                        MaximumRedirection      = 0
+                        ResponseHeadersVariable = 'WebhookResponseHeaders'
                     }
+                    $RedirectCount = 0
                     if ($RequestHeaders.Count -gt 0) {
                         $RestMethod['Headers'] = $RequestHeaders
                     }
@@ -316,6 +388,21 @@ function Send-CIPPAlert {
                             default {
                                 $RestMethod['Body'] = $ReplacedContent
                                 $WebhookResponse = Invoke-CIPPRestMethod @RestMethod
+                            }
+                        }
+                        # Like the HTTP client would, 301-303 continue as a GET and 307/308 repeat the POST.
+                        while ($WebhookStatusCode -in 301, 302, 303, 307, 308 -and $RedirectCount -lt 3 -and ($RedirectTo = [string]($WebhookResponseHeaders.Location | Select-Object -First 1))) {
+                            $RedirectCount++
+                            $RestMethod.Uri = [uri]::new([uri]$RestMethod.Uri, $RedirectTo).AbsoluteUri
+                            Assert-CIPPWebhookDestination -Uri $RestMethod.Uri
+                            if ($WebhookStatusCode -in 307, 308) {
+                                $WebhookResponse = Invoke-CIPPRestMethod @RestMethod
+                            } else {
+                                $FollowUp = @{} + $RestMethod
+                                $FollowUp.Method = 'GET'
+                                $FollowUp.Remove('Body')
+                                $FollowUp.Remove('ContentType')
+                                $WebhookResponse = Invoke-CIPPRestMethod @FollowUp
                             }
                         }
                         if ($WebhookStatusCode -eq 429) {
@@ -394,6 +481,10 @@ function Send-CIPPAlert {
                     $Alert.AffectedUser = $AffectedUser
                     $UserLabel = if ($AffectedUser.UPN) { $AffectedUser.UPN } elseif ($AffectedUser.AzureOID) { "OID:$($AffectedUser.AzureOID)" } else { 'unknown' }
                     Write-Information "PSA alert AffectedUser: $UserLabel"
+                }
+                if ($AffectedDevice) {
+                    $Alert.AffectedDevice = $AffectedDevice
+                    Write-Information "PSA alert AffectedDevice: $($AffectedDevice.DisplayName ?? $AffectedDevice.SerialNumber ?? $AffectedDevice.IntuneId)"
                 }
                 if ($PsaTicketPriority) {
                     $Alert.PsaTicketPriority = $PsaTicketPriority

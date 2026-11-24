@@ -6,9 +6,12 @@ import { usePermissions } from '../../hooks/use-permissions'
 import { Tooltip, Box, Divider, Typography, Alert, Skeleton, Link, IconButton } from '@mui/material'
 import CippFormComponent from './CippFormComponent'
 import { MfaVerifyForm } from './CippMfaVerifyForm'
+import { CippSharedMailboxLicenseAlert } from './CippSharedMailboxLicenseAlert'
 import { CippFormCondition } from './CippFormCondition'
 import { useWatch } from 'react-hook-form'
 import { ApiGetCall } from '../../api/ApiCall'
+import { isMultiTenant, tenantScope } from '../../utils/tenant-selection'
+import { BEC_WINDOW_OPTIONS } from '../../utils/bec-objectives'
 
 // Separate component for Manage Licenses form to avoid hook issues
 const ManageLicensesForm = ({ formControl, tenant }) => {
@@ -169,14 +172,14 @@ const ManageLicensesForm = ({ formControl, tenant }) => {
 export const TemporaryAccessPassForm = ({ formControl, row }) => {
   const tenantFilter = useSettings().currentTenant
   const rowData = Array.isArray(row) ? row[0] : row
-  const tenant = tenantFilter === 'AllTenants' && rowData?.Tenant ? rowData.Tenant : tenantFilter
+  const tenant = isMultiTenant(tenantFilter) && rowData?.Tenant ? rowData.Tenant : tenantFilter
 
   const tapPolicy = ApiGetCall({
     url: '/api/ListGraphRequest',
     data: {
       Endpoint:
         'policies/authenticationMethodsPolicy/authenticationMethodConfigurations/TemporaryAccessPass',
-      tenantFilter: tenant,
+      ...tenantScope(tenant),
     },
     queryKey: `TAPPolicy-${tenant}`,
   })
@@ -298,7 +301,7 @@ export const TemporaryAccessPassForm = ({ formControl, row }) => {
 export const OutOfOfficeForm = ({ formControl, row }) => {
   const tenantFilter = useSettings().currentTenant
   const rowData = Array.isArray(row) ? row[0] : row
-  const tenant = tenantFilter === 'AllTenants' && rowData?.Tenant ? rowData.Tenant : tenantFilter
+  const tenant = isMultiTenant(tenantFilter) && rowData?.Tenant ? rowData.Tenant : tenantFilter
   // Only prefill for a single selected user; with multiple users there is no single current value
   const singleUserUpn =
     (!Array.isArray(row) || row.length === 1) && rowData?.userPrincipalName
@@ -307,7 +310,7 @@ export const OutOfOfficeForm = ({ formControl, row }) => {
 
   const currentOoO = ApiGetCall({
     url: '/api/ListOoO',
-    data: { UserId: singleUserUpn, tenantFilter: tenant },
+    data: { UserId: singleUserUpn, ...tenantScope(tenant) },
     queryKey: `ListOoO-${singleUserUpn}-${tenant}`,
     waiting: !!singleUserUpn,
   })
@@ -600,7 +603,7 @@ export const useCippUserActions = () => {
           })) || []
         const primDomain = user.userPrincipalName?.split('@')[1] || ''
         return {
-          tenantFilter: tenant,
+          ...tenantScope(tenant),
           templateName: formData.templateName,
           defaultForTenant: formData.defaultForTenant || false,
           sourceUserId: user.id,
@@ -625,25 +628,25 @@ export const useCippUserActions = () => {
       condition: () => canWriteUser,
     },
     {
-      //tested
-      label: 'Research Compromised Account',
-      type: 'GET',
-      icon: <CippIcons.MagnifyingGlassIcon />,
-      link: '/identity/administration/bec/case?userId=[id]',
-      confirmText:
-        'Are you sure you want to research if [userPrincipalName] is a compromised account?',
-      multiPost: false,
-    },
-    {
       // Queues one BEC run per selected user (bulk-capable); results land on
       // the BEC Reports page
-      label: 'Run BEC investigation',
+      label: 'BEC Remediation',
       type: 'POST',
       url: '/api/ExecBECBulkCheck',
       icon: <CippIcons.MagnifyingGlassIcon />,
       data: { UserIds: 'id' },
       multiPost: true,
       bulkFilterEligible: true,
+      fields: [
+        {
+          type: 'autoComplete',
+          name: 'windowDays',
+          label: 'How far back to look',
+          options: BEC_WINDOW_OPTIONS,
+          multiple: false,
+          creatable: false,
+        },
+      ],
       confirmText:
         'Queue a Business Email Compromise investigation for the selected users? Each run is kept; see the Business Email Compromise page under Identity.',
       condition: (row) => row.userType !== 'Guest',
@@ -730,6 +733,7 @@ export const useCippUserActions = () => {
           ],
           validators: { required: 'Please select a mailbox type' },
         },
+        { name: 'sharedMailboxLicenseWarning', component: CippSharedMailboxLicenseAlert },
       ],
       confirmText: 'Pick the type of mailbox you want to convert [userPrincipalName] to:',
       multiPost: false,
@@ -802,7 +806,7 @@ export const useCippUserActions = () => {
 
         return selectedGroups.map((group) => ({
           addMember: addMember,
-          tenantFilter: tenant,
+          ...tenantScope(tenant),
           groupId: group,
         }))
       },
@@ -952,9 +956,27 @@ export const useCippUserActions = () => {
           ],
           validators: { required: 'Please select a shortcut location' },
         },
+        {
+          type: 'textField',
+          name: 'shortcutName',
+          label: 'Shortcut name (optional)',
+          helperText: 'Leave blank to keep the library or site name.',
+          validators: {
+            validate: (value) => {
+              if (!value) return true
+              if (/["*:<>?/\\|]/.test(value)) return 'Cannot contain any of: " * : < > ? / \\ |'
+              if (value !== value.trim()) return 'Cannot start or end with a space'
+              if (value.endsWith('.')) return 'Cannot end with a period'
+              if (value.length > 255) return 'Cannot be longer than 255 characters'
+              return true
+            },
+          },
+        },
       ],
       confirmText: 'Select a SharePoint site and where to create the OneDrive shortcut:',
-      multiPost: false,
+      // One request for all selected users: the backend attempts every user and reports each
+      // failure in place, so a bulk rollout does not stop at the first user that already has it.
+      multiPost: true,
       allowResubmit: true,
       condition: () => canWriteUser,
     },

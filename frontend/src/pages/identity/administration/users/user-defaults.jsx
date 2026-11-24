@@ -1,9 +1,8 @@
 import { Layout as DashboardLayout } from '../../../../layouts/index'
 import { TabbedLayout } from '../../../../layouts/TabbedLayout'
 import { CippIcons } from '../../../../utils/icon-registry'
-import { CippDataTable } from '../../../../components/CippTable/CippDataTable'
-import { CippHead } from '../../../../components/CippComponents/CippHead'
-import { Box, Button } from '@mui/material'
+import { CippTablePage } from '../../../../components/CippComponents/CippTablePage'
+import { Button } from '@mui/material'
 import { useDialog } from '../../../../hooks/use-dialog'
 import { CippApiDialog } from '../../../../components/CippComponents/CippApiDialog'
 import countryList from '../../../../data/countryList.json'
@@ -53,7 +52,19 @@ const Page = () => {
         { label: '%FirstName[1]%.%LastName% (j.doe)', value: '%FirstName[1]%.%LastName%' },
         { label: '%LastName% (doe)', value: '%LastName%' },
         { label: '%FirstName% (john)', value: '%FirstName%' },
+        {
+          label: '%FirstName[1]%.%LastNamePrefix[1]%%LastNameCore% (j.vdberg)',
+          value: '%FirstName[1]%.%LastNamePrefix[1]%%LastNameCore%',
+        },
+        {
+          label: '%FirstName[1]%%LastNamePrefix[1]%%LastNameCore% (jvdberg)',
+          value: '%FirstName[1]%%LastNamePrefix[1]%%LastNameCore%',
+        },
+        { label: '%FirstName%.%LastNameCore% (jan.berg)', value: '%FirstName%.%LastNameCore%' },
+        { label: '%FirstName[1]%.%LastNameCore% (j.berg)', value: '%FirstName[1]%.%LastNameCore%' },
       ],
+      helperText:
+        "Surname particles such as 'van de' are available separately as %LastNamePrefix% and the remaining name as %LastNameCore%.",
       multiple: false,
       creatable: true,
     },
@@ -384,31 +395,29 @@ const Page = () => {
 
   return (
     <>
-      <CippHead title={pageTitle} />
-      <Box sx={{ py: 2 }}>
-        <CippDataTable
-          title="User Templates"
-          api={{ url: `/api/ListNewUserDefaults?includeAllTenants=false&tenantFilter=${userSettings.currentTenant}` }}
-          queryKey={`ListNewUserDefaults-${userSettings.currentTenant}`}
-          actions={actions}
-          offCanvas={offCanvas}
-          mobileCard={{ primary: 'templateName' }}
-          simpleColumns={[
-            'templateName',
-            'defaultForTenant',
-            'displayName',
-            'usernameFormat',
-            'usernameSpaceHandling',
-            'usageLocation',
-            'department',
-          ]}
-          cardButton={
-            <Button startIcon={<CippIcons.Add />} onClick={createDialog.handleOpen} sx={{ mr: 1 }}>
-              Add Template
-            </Button>
-          }
-        />
-      </Box>
+      <CippTablePage
+        title={pageTitle}
+        apiUrl="/api/ListNewUserDefaults"
+        apiData={{ includeAllTenants: false }}
+        queryKey={`ListNewUserDefaults-${userSettings.currentTenant}`}
+        actions={actions}
+        offCanvas={offCanvas}
+        mobileCard={{ primary: 'templateName' }}
+        simpleColumns={[
+          'templateName',
+          'defaultForTenant',
+          'displayName',
+          'usernameFormat',
+          'usernameSpaceHandling',
+          'usageLocation',
+          'department',
+        ]}
+        cardButton={
+          <Button startIcon={<CippIcons.Add />} onClick={createDialog.handleOpen} sx={{ mr: 1 }}>
+            Add Template
+          </Button>
+        }
+      />
 
       <CippApiDialog
         createDialog={createDialog}

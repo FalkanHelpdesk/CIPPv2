@@ -23,6 +23,8 @@ import React from 'react'
 import { CippTableDialog } from './CippTableDialog'
 import { CippJobProgress, formatJobProgressText } from './CippJobProgress'
 import { useDialog } from '../../hooks/use-dialog'
+import { mergeRow, useCraftJobEvents } from '../../hooks/use-craft-events'
+import { useQueryClient } from '@tanstack/react-query'
 
 const extractAllResults = (data, extraIgnoreKeys = []) => {
   const results = []
@@ -154,11 +156,20 @@ export const CippApiResults = (props) => {
     }
   }, [jobProgress, jobIdField, apiObject.isPending, apiObject.isSuccess, apiObject.data])
 
+  const queryClient = useQueryClient()
+  // Each pushed frame is one changed row; a frame without data (a resync) means read the job again.
+  const jobConnected = useCraftJobEvents(jobPollActive ? jobId : null, (frame) => {
+    if (!frame.data) {
+      jobStatus.refetch()
+      return
+    }
+    queryClient.setQueryData([`CippJobProgress-${jobId}`], (old) => mergeRow(old, frame.data))
+  })
   const jobStatus = ApiGetCall({
     url: jobProgress && jobId ? jobProgress.url(jobId) : null,
     queryKey: `CippJobProgress-${jobId}`,
     waiting: !!(jobProgress && jobId),
-    refetchInterval: jobPollActive ? (jobProgress?.interval ?? 5000) : false,
+    refetchInterval: jobPollActive && !jobConnected ? (jobProgress?.interval ?? 5000) : false,
     staleTime: 0,
   })
   const jobRows = useMemo(
@@ -325,6 +336,10 @@ export const CippApiResults = (props) => {
     finalResults.some((r) => (r.groupIndex ?? r.id) === group && r.severity === 'error')
   ).length
   const successActionCount = actionCount - failedActionCount
+  // Render nothing when idle so a wrapping Stack adds no phantom spacing
+  if (!hasVisibleResults && !(fetchingVisible && !errorsOnly)) {
+    return null
+  }
   return (
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       {/* Loading alert */}

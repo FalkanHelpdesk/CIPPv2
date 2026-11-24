@@ -5,7 +5,9 @@ import Link from 'next/link'
 import { Button } from '@mui/material'
 import { getCippError } from '../../utils/get-cipp-error'
 import { CippInfoBar } from '../CippCards/CippInfoBar'
+import { ServiceHealthCard } from '../CippComponents/ServiceHealthCard'
 import { useAllTenantsDashboard } from './useAllTenantsDashboard'
+import { useMultiTenantScope } from '../../hooks/use-multi-tenant-scope'
 import {
   AllTenantsBandHeading,
   AllTenantsBarList,
@@ -47,6 +49,7 @@ const DashboardCard = ({ title, subheader, api, children, action }) => {
 }
 
 export const AllTenantsDashboard = () => {
+  const scope = useMultiTenantScope()
   const {
     tenantCount,
     tenants,
@@ -155,7 +158,7 @@ export const AllTenantsDashboard = () => {
                 }}>
                 <Box>
                   <Typography variant="h4" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {secureScore.average}%
+                    {secureScore.average.toFixed(2)}%
                   </Typography>
                   <Typography variant="caption" sx={{
                     color: "text.disabled"
@@ -223,7 +226,7 @@ export const AllTenantsDashboard = () => {
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {secureScore.best?.percent}%
+                        {secureScore.best?.percent?.toFixed(2)}%
                       </Typography>
                     </Box>
                     <Box sx={{ minWidth: 0, textAlign: 'right' }}>
@@ -242,7 +245,7 @@ export const AllTenantsDashboard = () => {
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
-                        {secureScore.worst?.percent}%
+                        {secureScore.worst?.percent?.toFixed(2)}%
                       </Typography>
                     </Box>
                   </Stack>
@@ -363,7 +366,7 @@ export const AllTenantsDashboard = () => {
               subheader="Tenants bucketed by combined alignment score"
               api={alignmentApi}
               action={
-                <Button component={Link} href="/tenant/standards/alignment" size="small">
+                <Button component={Link} href={alignment.path} size="small">
                   View
                 </Button>
               }
@@ -443,6 +446,12 @@ export const AllTenantsDashboard = () => {
           description="What is broken, expiring, or stuck right now"
         />
 
+        {/* Outages first: a Microsoft incident explains the errors and failed checks below it.
+            AllTenants reads the nightly cache, each issue once with the tenants it reached. */}
+        <Box sx={{ mb: 2 }}>
+          <ServiceHealthCard tenantFilter={scope} />
+        </Box>
+
         <Grid container spacing={2} sx={{ mb: 2 }}>
           {canReadLogs && (
             <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
@@ -483,7 +492,7 @@ export const AllTenantsDashboard = () => {
               value={alignment.pendingDeviations}
               label="Standards deviations awaiting approval"
               meta={`${alignment.pendingTenantCount} tenants`}
-              link="/tenant/standards/alignment"
+              link={alignment.path}
             />
           </Grid>
         </Grid>
@@ -638,7 +647,7 @@ export const AllTenantsDashboard = () => {
                   <AllTenantsCacheList
                     rows={cache.staleTenants}
                     isFetching={countsApi.isLoading || tenants.isLoading}
-                    emptyText="Every tenant was cached within the last 30 hours."
+                    emptyText="Every tenant was cached within the last 48 hours."
                   />
                 </Grid>
               </Grid>

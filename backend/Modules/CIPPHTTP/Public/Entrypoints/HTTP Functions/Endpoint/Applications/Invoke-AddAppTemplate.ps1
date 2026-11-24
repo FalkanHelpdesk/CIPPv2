@@ -8,6 +8,10 @@ function Invoke-AddAppTemplate {
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
 
+    if (-not (Test-CippTemplateWriteAccess -PartitionKey 'AppTemplate' -RowKey $Request.Body.GUID)) {
+        return ([HttpResponseContext]@{ StatusCode = [HttpStatusCode]::Forbidden; Body = @{ Results = 'Roles limited to specific tenants cannot change or remove shared templates.' } })
+    }
+
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
 
@@ -29,7 +33,8 @@ function Invoke-AddAppTemplate {
             $AppType = [string]$App.appType
             $ParsedConfig = $null
             try { $ParsedConfig = $ConfigValue | ConvertFrom-Json -Depth 100 -ErrorAction Stop } catch { $ParsedConfig = $null }
-            if ($ParsedConfig.IntuneBody.id -and $AppType -notin @('officeApp', 'edgeApp')) {
+            $IsScriptApp = $AppType -eq 'win32ScriptApp' -and $ParsedConfig.installScript
+            if ($ParsedConfig.IntuneBody.id -and $AppType -notin @('officeApp', 'edgeApp') -and -not $IsScriptApp) {
                 $AppName = if ($App.appName) { [string]$App.appName } else { [string]$ParsedConfig.ApplicationName }
                 throw "'$AppName' is an existing Intune application with uploaded installer content. CIPP application templates are rebuilt from a package or script at deployment, so only Store, Chocolatey, Office, Edge, MSP and Custom (script) applications can be templated."
             }
@@ -45,7 +50,7 @@ function Invoke-AddAppTemplate {
 
         # Upsert: if GUID provided, update existing template
         if ($Body.GUID) {
-            $Filter = "PartitionKey eq 'AppTemplate' and RowKey eq '$($Body.GUID)'"
+            $Filter = "PartitionKey eq 'AppTemplate' and RowKey eq '$(ConvertTo-CIPPODataFilterValue -Value $Body.GUID)'"
             $ExistingEntity = Get-CIPPAzDataTableEntity @Table -Filter $Filter
         }
 

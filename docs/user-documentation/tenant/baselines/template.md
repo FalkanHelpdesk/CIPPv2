@@ -6,18 +6,19 @@ description: Build a baseline, assign it to tenants and stage its rollout
 
 The editor is where a baseline is given its name, its tenants, and the standards it applies. Standards are organised into stages, and a tenant receives a stage's standards only once it has met that stage's graduation conditions, which lets a baseline roll out gradually rather than all at once.
 
-{% hint style="warning" %}
-Baselines is in beta. Behaviour and screens are still changing between releases.
-{% endhint %}
-
 Leaving the page with unsaved work prompts you to confirm first.
+
+## Overview
+
+{% @storylane/embed subdomain="app" linkValue="av1rymxqugob" url="https://app.storylane.io/share/av1rymxqugob" %}
 
 ## Page Actions
 
-| Button        | Description                                                                                                                                                                                                                                                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Save Baseline | Saves the baseline once you confirm. Greyed out until the three items in **Setup Progress** are complete. After a save you are offered a check of the assigned tenants, which makes no changes and reports its results on the [Alignment](alignment.md) page. Otherwise the schedule picks the baseline up within twelve hours. |
-| Add Stage     | Adds a stage, either empty or as a copy of the stage currently open, including its standards and graduation conditions.                                                                                                                                                                                                         |
+| Button            | Description                                                                                                                                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Back to Baselines | Returns to [Manage Baselines](templates.md), even when the editor was opened from the Alignment page.                                                                                                                                                                                                                           |
+| Save Baseline     | Saves the baseline once you confirm. Greyed out until the three items in **Setup Progress** are complete. After a save you are offered a check of the assigned tenants, which makes no changes and reports its results on the [Alignment](alignment.md) page. Otherwise the schedule picks the baseline up within twelve hours. |
+| Add Stage         | Adds a stage, either empty or as a copy of the stage currently open, including its standards and graduation conditions. A baseline holds at most 20 stages; once it has 20 the button is greyed out and reads **Maximum of 20 stages reached**.                                                                                 |
 
 ## GitHub Sync
 
@@ -31,6 +32,8 @@ Saving a synced baseline adds these fields to the confirmation.
 | Commit Message | The commit message for the push. Appears once **Save to GitHub** is on, and is then required.                              |
 
 Saving without pushing keeps your changes in CIPP only, and the repository copy stays out of date until you push it. Where you cannot push to the repository, the next sync replaces your changes if the file changes upstream. To keep a copy that upstream never touches, use **Clone & Edit Baseline** on the [Manage Baselines](templates.md) page.
+
+Importing the baseline again from its repository, for example to take an upstream change, updates it in place. Its stages and standards come from the repository copy, while its **Assigned Tenants**, **Excluded Tenants**, alerting settings, and **Disable Scheduled Runs** stay as they are. If the repository file names tenants of its own, those replace **Assigned Tenants**.
 
 ## Baseline Details
 
@@ -71,33 +74,45 @@ Each stage has its own tab. Stage 1 always applies to every assigned tenant, so 
 
 A chip next to the stage name shows how many tenants are currently sitting in that stage.
 
+Stages after Stage 1 can be reordered with the up and down arrows beside the stage name. A stage keeps its name, standards and graduation conditions when it moves, and the stage numbers are renumbered to match. Stage 1 never moves and nothing can be moved above it, so the up arrow is greyed out on Stage 2 and the down arrow on the last stage.
+
+Saving never moves a tenant forward. Where stages have been removed, reordered or inserted, each tenant keeps only the leading stages it had already reached, and is moved back where the stage it sat in has changed. The move is recorded on the [Alignment](alignment.md) page's Historic View.
+
 ### Graduation Conditions
 
 Add as many conditions as you need. With more than one, a **Condition Logic** field appears and sets whether all of them must match or any one of them is enough. A stage with no conditions can only be advanced into by hand, from the Alignment page.
+
+**Add OR Condition Group** adds another set of conditions, with its own Condition Logic. A tenant advances once it meets any one group. For example, one group can require that the tenant is in a tenant group and that all previous stage items applied successfully, while a second group holds only manual approval, so an operator can still move a tenant forward that does not meet the first group. A tenant outside a required tenant group is only held back when every group requires a group it is not in.
 
 | Condition                                     | Description                                                                                                                        |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Time in previous stage                        | The tenant has spent a given number of days or weeks in the stage before this one.                                                 |
 | Tenant variable                               | A custom variable on the tenant matches the value you give, compared with equals, not equals, starts with, or does not start with. |
-| Is in tenant group                            | The tenant belongs to the tenant group you choose.                                                                                 |
-| All previous stage items applied successfully | Every standard from the earlier stages reports as compliant for the tenant.                                                        |
+| Is in tenant group                            | The tenant belongs to the tenant group you choose. Where all conditions must match, a tenant outside the group never reaches this stage, so its rollout ends at the stage before. |
+| All previous stage items applied successfully | Every standard from the earlier stages is compliant or accepted for the tenant. A standard the tenant is not licensed for does not hold the tenant back. |
 | Manual approval by an operator                | The tenant waits until an operator advances it from the [Alignment](alignment.md) page.                                            |
 
 ### Standards In This Stage
 
 **Add Standards** opens the catalogue, where standards can be searched by name, description, or benchmark tag, and narrowed by category, impact, the source that recommends them, and compliance tags. The results can be sorted, and shown as cards or as a list.
 
-Each standard added to the stage expands to show its own settings, along with its impact, the Secure Score points it is worth, the benchmarks that recommend it, and the licences a tenant needs before it counts towards scoring. Standards that support it can be added more than once, so the same standard can be configured differently within one stage.
+Each standard added to the stage expands to show its own settings, along with its impact, the Secure Score points it is worth, the benchmarks that recommend it, and the licences a tenant needs before it counts towards scoring. On the **Requires** chip, licences joined by **or** are alternatives, and groups joined by **and** are all needed. A setting marked **Enforced by the standard definition and cannot be changed** is greyed out and shows the value the standard always applies. Standards that support it can be added more than once, so the same standard can be configured differently within one stage. Those standards carry a plus button on their row, with the tooltip **Add another** followed by the standard's name, which adds a further copy to the stage and opens it straight away so you can set it up.
 
 Three settings are common to every standard.
 
-| Setting                                        | Description                                                                                             |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Automatically fix this when the setting drifts | Corrects the setting back to its expected value on every run. Left off, the deviation is only reported. |
-| Alert on new deviation                         | Raises an alert the first time the setting is found to deviate.                                         |
-| Alert when remediated                          | Raises an alert whenever automatic fixing corrects the setting.                                         |
+| Setting                                        | Description                                                                                                                                                                                                                                                 |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Automatically fix this when the setting drifts | Corrects the setting back to its expected value on every run. Left off, the deviation is only reported.                                                                                                                                                     |
+| Alert on new deviation                         | Raises an alert when the setting starts to deviate. No further alert is sent while it stays in **Drift**, however often the check runs. You are alerted again only after the setting is compliant or the deviation is accepted, and it then deviates again. |
+| Alert when remediated                          | Raises an alert when automatic fixing corrects a setting that was not compliant. A setting that is reapplied on every run while already compliant raises no further alert.                                                                                                                                                                                             |
 
 **Set all standards to** applies any one of those settings across every standard in the stage at once.
+
+**Detect Intune Drift** and **Detect Conditional Access Drift** work differently from other standards. Instead of checking one setting, they raise a deviation for every Intune or Conditional Access policy in the tenant that no baseline template covers. They never change anything automatically, even with automatic fixing turned on. Review each policy on the [Alignment](alignment.md) page, where denying it removes the policy on the next run.
+
+{% hint style="warning" %}
+Each of these standards has a single result per tenant, however many policies it finds. You are alerted when the first uncovered policy appears. Any policy added or changed after that raises no alert of its own while the earlier ones are still awaiting a decision. To be alerted about new policies, accept every existing uncovered policy on the [Alignment](alignment.md) page, or add a template to the baseline that covers it, so the standard is back to compliant.
+{% endhint %}
 
 {% hint style="info" %}
 Standards arrive with automatic fixing switched off. Nothing is changed in a tenant until you turn it on, either per standard or with **Set all standards to**.

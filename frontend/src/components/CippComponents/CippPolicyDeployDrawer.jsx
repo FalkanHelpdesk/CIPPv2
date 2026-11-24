@@ -102,7 +102,6 @@ export const CippPolicyDeployDrawer = ({
   const deployPolicy = ApiPostCall({
     urlFromData: true,
     relatedQueryKeys: [
-      'IntuneTemplates',
       `Configuration Policies - ${tenantFilter}`,
       `Intune Compliance Policies - ${tenantFilter}`,
       `App Protection & Configuration Policies - ${tenantFilter}`,
@@ -126,12 +125,6 @@ export const CippPolicyDeployDrawer = ({
     console.log('Submitting form data:', formData)
     deployPolicy.mutate({
       url: '/api/AddPolicy',
-      relatedQueryKeys: [
-        'IntuneTemplates',
-        'Configuration Policies',
-        'Compliance Policies',
-        'Protection Policies',
-      ],
       data: {
         ...formData,
         AssignmentFilterName: assignmentFilterName,
@@ -160,24 +153,27 @@ export const CippPolicyDeployDrawer = ({
         onClose={handleCloseDrawer}
         size="lg"
         footer={
-          <Stack direction="row" spacing={2} sx={{
-            justifyContent: "flex-start"
-          }}>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleSubmit}
-              disabled={deployPolicy.isLoading || !isValid}
-            >
-              {deployPolicy.isLoading
-                ? 'Deploying...'
-                : deployPolicy.isSuccess
-                  ? 'Redeploy Policy'
-                  : 'Deploy Policy'}
-            </Button>
-            <Button variant="outlined" onClick={handleCloseDrawer}>
-              Close
-            </Button>
+          <Stack spacing={2}>
+            <CippApiResults apiObject={deployPolicy} />
+            <Stack direction="row" spacing={2} sx={{
+              justifyContent: "flex-start"
+            }}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleSubmit}
+                disabled={deployPolicy.isPending || !isValid}
+              >
+                {deployPolicy.isPending
+                  ? 'Deploying...'
+                  : deployPolicy.isSuccess
+                    ? 'Redeploy Policy'
+                    : 'Deploy Policy'}
+              </Button>
+              <Button variant="outlined" onClick={handleCloseDrawer}>
+                Close
+              </Button>
+            </Stack>
           </Stack>
         }
       >
@@ -366,7 +362,6 @@ export const CippPolicyDeployDrawer = ({
               ))
             })()}
           </CippFormCondition>
-          <CippApiResults apiObject={deployPolicy} />
         </Stack>
       </CippOffCanvas>
     </>

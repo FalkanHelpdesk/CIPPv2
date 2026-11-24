@@ -6,6 +6,24 @@ Schedules are cron expressions, accepting either the standard five field form or
 
 ## Table Details
 
+The columns depend on the infrastructure your instance runs on.
+
+**New infrastructure**
+
+| Column          | Description                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Priority        | The order in which timers are processed when several are due at the same time. Lower numbers run first.               |
+| Command         | The CIPP function the timer executes.                                                                                  |
+| Parameters      | Any parameters passed to that function, where the timer defines them.                                                  |
+| Cron            | The schedule the timer runs on.                                                                                        |
+| Timezone        | The timezone the schedule is evaluated in.                                                                             |
+| Jitter Minutes  | The most a run can be delayed past its scheduled time, so that a timer does not always start at exactly the same moment. Timers with no jitter show 0. |
+| Jitter Delay    | The delay picked for the timer's upcoming run, within its jitter limit.                                                |
+| Next Occurrence | When the timer is next due to run.                                                                                     |
+| Last Occurrence | When the timer last ran.                                                                                               |
+
+**Legacy Function App infrastructure**
+
 | Column              | Description                                                                                                                              |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Priority            | The order in which timers are processed when several are due at the same time. Lower numbers run first.                                  |
@@ -28,11 +46,13 @@ This page lists every timer CIPP defines, including those tied to features that 
 
 {% hint style="warning" %}
 **Run Now** starts the work straight away and does not check whether that timer is already running. Triggering a long-running timer repeatedly, or in bulk across several timers, can leave overlapping runs competing for the same resources. Give a run time to finish before starting another.
+
+Standards, drift and cache collection runs guard themselves: if one is started while a run of the same name is still in progress, the new run is skipped and a warning is written to the logbook.
 {% endhint %}
 
 ## Reset to Default
 
-**Reset to Default** discards any customised schedules and restores the timings CIPP ships with. You are asked to confirm before it applies.
+**Reset to Default** discards any customised schedules and restores the timings CIPP ships with. You are asked to confirm before it applies. The button is only available on the legacy Function App infrastructure.
 
 {% hint style="warning" %}
 This applies to every timer at once. There is no way to reset an individual schedule, and no record is kept of what the customised values were, so note anything you want to reinstate before resetting.

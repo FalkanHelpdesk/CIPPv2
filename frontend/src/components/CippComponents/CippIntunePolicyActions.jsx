@@ -1,4 +1,5 @@
 import { CippIcons } from '../../utils/icon-registry'
+import { isMultiTenant, tenantScope } from '../../utils/tenant-selection'
 
 const assignmentModeOptions = [
   { label: 'Replace existing assignments', value: 'replace' },
@@ -188,17 +189,17 @@ export const useCippIntunePolicyActions = (tenant, policyType, options = {}) => 
       // Re-validate the picker so the empty-allowed rule updates when direction changes.
       validators: { deps: ['groupTargets'] },
       helperText:
-        'Include assigns to these groups; Exclude excludes them. Replace updates only this direction and keeps the other (and All Users/All Devices) intact.',
+        'Include assigns to these groups. Exclude excludes these groups.',
     },
     ...getOptionsAndFilterFields(
-      'Replace updates only the selected direction and keeps the other direction plus All Users/All Devices. Append adds the selected groups to existing assignments.'
+      'Replace + Include: these groups become the only assignments, and All Users/All Devices are removed. Exclusions stay. Replace + Exclude: these groups become the only exclusions. Assignments stay. Append: adds these groups and removes nothing.'
     ),
   ]
 
   const getCustomDataFormatter = (assignTo) => (row, action, formData) => {
     const rows = Array.isArray(row) ? row : [row]
     return rows.map((item) => ({
-      tenantFilter: tenant === 'AllTenants' && item?.Tenant ? item.Tenant : tenant,
+      ...tenantScope(isMultiTenant(tenant) && item?.Tenant ? item.Tenant : tenant),
       ID: item?.id,
       type: item?.URLName || policyType,
       ...(platformType && { platformType }),
@@ -220,7 +221,7 @@ export const useCippIntunePolicyActions = (tenant, policyType, options = {}) => 
     const ids = selectedGroups.map((group) => group.value).filter(Boolean)
     const names = selectedGroups.map((group) => group.label).filter(Boolean)
     return rows.map((item) => ({
-      tenantFilter: tenant === 'AllTenants' && item?.Tenant ? item.Tenant : tenant,
+      ...tenantScope(isMultiTenant(tenant) && item?.Tenant ? item.Tenant : tenant),
       ID: item?.id,
       type: item?.URLName || policyType,
       ...(platformType && { platformType }),

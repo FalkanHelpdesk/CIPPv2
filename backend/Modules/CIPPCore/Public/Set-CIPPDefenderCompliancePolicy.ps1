@@ -31,15 +31,15 @@ function Set-CIPPDefenderCompliancePolicy {
         allowPartnerToCollectIOSPersonalApplicationMetadata = [bool]$Compliance.allowPartnerToCollectIosPersonalApplicationMetadata
         androidDeviceBlockedOnMissingPartnerData            = [bool]$Compliance.androidDeviceBlockedOnMissingPartnerData
         iosDeviceBlockedOnMissingPartnerData                = [bool]$Compliance.iosDeviceBlockedOnMissingPartnerData
-        windowsDeviceBlockedOnMissingPartnerData            = [bool]$Compliance.windowsDeviceBlockedOnMissingPartnerData
-        macDeviceBlockedOnMissingPartnerData                = [bool]$Compliance.macDeviceBlockedOnMissingPartnerData
+        windowsDeviceBlockedOnMissingPartnerData            = if ([bool]$Compliance.ConnectWindows) { $true } else { [bool]$Compliance.windowsDeviceBlockedOnMissingPartnerData }
+        macDeviceBlockedOnMissingPartnerData                = if ([bool]$Compliance.ConnectMac) { $true } else { [bool]$Compliance.macDeviceBlockedOnMissingPartnerData }
         androidMobileApplicationManagementEnabled           = [bool]$Compliance.ConnectAndroidCompliance
         iosMobileApplicationManagementEnabled               = [bool]$Compliance.ConnectIosCompliance
         windowsMobileApplicationManagementEnabled           = [bool]$Compliance.windowsMobileApplicationManagementEnabled
         allowPartnerToCollectIosCertificateMetadata         = [bool]$Compliance.allowPartnerToCollectIosCertificateMetadata
         allowPartnerToCollectIosPersonalCertificateMetadata = [bool]$Compliance.allowPartnerToCollectIosPersonalCertificateMetadata
         grantMobileThreatDefensePartnerRole                 = [bool]$Compliance.grantMobileThreatDefensePartnerRole
-        microsoftDefenderForEndpointAttachEnabled           = [bool]$true
+        microsoftDefenderForEndpointAttachEnabled           = [bool]$Compliance.AllowMEMEnforceCompliance
     }
     $SettingsObj = $SettingsObject | ConvertTo-Json -Compress
     $ConnectorUri = 'https://graph.microsoft.com/beta/deviceManagement/mobileThreatDefenseConnectors/fc780465-2017-40d4-a0c5-307022471b92'

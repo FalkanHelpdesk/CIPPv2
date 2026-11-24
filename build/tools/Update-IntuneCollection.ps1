@@ -13,6 +13,8 @@
                                                which is what the UI fetches (see
                                                Split-IntuneCollection.ps1 for why)
       frontend\public\intuneCategories.json    the category records, whole
+      frontend\public\intune-templates\        one file per configuration policy template with
+                                               its setting templates, plus index.json
 
     The definitions translate raw settingDefinitionIds into human-readable display
     names. Each carries categoryName for grouping, plus categoryId to join against
@@ -114,17 +116,21 @@ Write-Host 'Transforming data...' -ForegroundColor Yellow
 
 $collection = $allSettings | Sort-Object -Property id | ForEach-Object {
     $rawOptions = $_.PSObject.Properties['options']?.Value
-    $options = if ($rawOptions -and $rawOptions.Count -gt 0) {
-        $rawOptions | ForEach-Object {
+    # Assigned inside the branch: an if-statement's output is enumerated, so a one-option array would
+    # be written out as a bare object.
+    $options = $null
+    if ($rawOptions -and $rawOptions.Count -gt 0) {
+        $options = @($rawOptions | ForEach-Object {
             [PSCustomObject]@{
-                id          = $_.PSObject.Properties['itemId']?.Value
-                displayName = $_.PSObject.Properties['displayName']?.Value
-                description = $_.PSObject.Properties['description']?.Value
-                helpText    = $_.PSObject.Properties['helpText']?.Value
+                id           = $_.PSObject.Properties['itemId']?.Value
+                displayName  = $_.PSObject.Properties['displayName']?.Value
+                description  = $_.PSObject.Properties['description']?.Value
+                helpText     = $_.PSObject.Properties['helpText']?.Value
+                optionValue  = $_.PSObject.Properties['optionValue']?.Value
+                dependentOn  = $_.PSObject.Properties['dependentOn']?.Value
+                dependedOnBy = $_.PSObject.Properties['dependedOnBy']?.Value
             }
-        }
-    } else {
-        $null
+        })
     }
 
     # The name is denormalised so the common case - showing a heading - needs nothing but the
@@ -142,6 +148,21 @@ $collection = $allSettings | Sort-Object -Property id | ForEach-Object {
         categoryId   = $CategoryId
         categoryName = $CategoryName
         options      = $options
+        minimumCount = $_.PSObject.Properties['minimumCount']?.Value
+        maximumCount = $_.PSObject.Properties['maximumCount']?.Value
+
+        # Construction fields: what the template picker needs to build a setting from nothing.
+        # Frontend bundles only - the backend file stays lean because every worker parses it.
+        '@odata.type'    = $_.PSObject.Properties['@odata.type']?.Value
+        valueDefinition  = $_.PSObject.Properties['valueDefinition']?.Value
+        defaultOptionId  = $_.PSObject.Properties['defaultOptionId']?.Value
+        applicability    = $_.PSObject.Properties['applicability']?.Value
+        settingUsage     = $_.PSObject.Properties['settingUsage']?.Value
+        visibility       = $_.PSObject.Properties['visibility']?.Value
+        rootDefinitionId = $_.PSObject.Properties['rootDefinitionId']?.Value
+        childIds         = $_.PSObject.Properties['childIds']?.Value
+        dependentOn      = $_.PSObject.Properties['dependentOn']?.Value
+        dependedOnBy     = $_.PSObject.Properties['dependedOnBy']?.Value
     }
 }
 
@@ -151,7 +172,22 @@ Write-Host "Settings with a category name: $Categorised of $($collection.Count)"
 # ---------------------------------------------------------------------------
 # Write output files
 # ---------------------------------------------------------------------------
-$json = $collection | ConvertTo-Json -Depth 5 -Compress
+$json = $collection |
+    Select-Object id, displayName, description, helpText, infoUrls, categoryId, categoryName, @{ n = 'options'; e = {
+            if ($_.options) {
+                , @(foreach ($Option in $_.options) {
+                        $Slim = [ordered]@{ id = $Option.id; displayName = $Option.displayName; description = $Option.description; helpText = $Option.helpText }
+                        # Only where present: validation needs them, and every worker parses this file.
+                        $Required = @(@($Option.dependedOnBy).Where({ $_.required }).ForEach({ $_.dependedOnBy }))
+                        if ($Required.Count -gt 0) { $Slim.requiredChildIds = $Required }
+                        [pscustomobject]$Slim
+                    })
+            }
+        }
+    }, minimumCount, maximumCount |
+    ConvertTo-Json -Depth 5 -Compress
+$fullJsonPath = Join-Path ([System.IO.Path]::GetTempPath()) 'intuneCollection.full.json'
+$collection | ConvertTo-Json -Depth 15 -Compress | Set-Content -Path $fullJsonPath -Encoding utf8NoBOM
 
 # Backend Config (used by Compare-CIPPIntuneObject.ps1 at runtime)
 $apiPath = Join-Path $PSScriptRoot '..\..\backend\Config\intuneCollection.json'
@@ -177,6 +213,31 @@ if ($categories.Count -gt 0) {
 # Frontend: 256 bucket bundles rather than the whole catalog. The UI fetches only the buckets a
 # policy references - see Split-IntuneCollection.ps1 for why, and for the naming.
 $splitScript = Join-Path $PSScriptRoot 'Split-IntuneCollection.ps1'
-& $splitScript -CollectionPath $apiPath
+& $splitScript -CollectionPath $fullJsonPath
+Remove-Item -LiteralPath $fullJsonPath
+
+# Template setting ids are the same in every tenant. Own folder: Split-IntuneCollection replaces intune-definitions wholesale.
+Write-Host 'Fetching configuration policy templates...' -ForegroundColor Yellow
+
+$templates = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/deviceManagement/configurationPolicyTemplates' -tenantid $TenantId -NoAuthCheck $true
+$templatePath = Join-Path $PSScriptRoot '..\..\frontend\public\intune-templates'
+if (Test-Path $templatePath) {
+    Remove-Item -Path $templatePath -Recurse -Force
+}
+$null = New-Item -ItemType Directory -Path $templatePath -Force
+
+$templateIndex = foreach ($template in ($templates | Sort-Object -Property id)) {
+    try {
+        $settingTemplates = @(New-GraphGetRequest -uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicyTemplates('$($template.id)')/settingTemplates" -tenantid $TenantId -NoAuthCheck $true)
+    } catch {
+        Write-Host "Could not fetch setting templates for $($template.id): $($_.Exception.Message)" -ForegroundColor Yellow
+        continue
+    }
+    $template | Select-Object -Property *
+    $template | Add-Member -NotePropertyName 'settingTemplates' -NotePropertyValue $settingTemplates -Force
+    ConvertTo-Json -InputObject $template -Depth 40 -Compress | Set-Content -Path (Join-Path $templatePath "$($template.id).json") -Encoding utf8NoBOM
+}
+ConvertTo-Json -InputObject @($templateIndex) -Depth 5 -Compress | Set-Content -Path (Join-Path $templatePath 'index.json') -Encoding utf8NoBOM
+Write-Host "Written: $(@($templateIndex).Count) of $(@($templates).Count) policy templates to $(Resolve-Path $templatePath)" -ForegroundColor Green
 
 Write-Host "`nDone. $($collection.Count) settings written to intuneCollection.json." -ForegroundColor Green

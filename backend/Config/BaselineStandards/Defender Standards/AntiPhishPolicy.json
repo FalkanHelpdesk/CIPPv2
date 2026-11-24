@@ -16,7 +16,9 @@
     "mdo_targeteddomainprotectionaction",
     "mdo_similaruserssafetytips",
     "mdo_similardomainssafetytips",
-    "mdo_unusualcharacterssafetytips"
+    "mdo_unusualcharacterssafetytips",
+    "CMMC (SI.L2-3.14.6)",
+    "NIST SP 800-171 (3.14.6)"
   ],
   "impact": "Low Impact",
   "helpText": "This creates an Anti-Phishing policy. On tenants without Defender for Office 365 only the settings that exist there are graded; impersonation and mailbox-intelligence protection are skipped.",
@@ -111,6 +113,7 @@
     },
     "SpoofQuarantineTag": {
       "type": "select",
+      "creatable": true,
       "multiple": false,
       "label": "Spoof quarantine tag",
       "required": true,
@@ -157,6 +160,7 @@
     },
     "MailboxIntelligenceQuarantineTag": {
       "type": "select",
+      "creatable": true,
       "multiple": false,
       "label": "Mailbox intelligence quarantine tag",
       "required": true,
@@ -203,6 +207,7 @@
     },
     "TargetedUserQuarantineTag": {
       "type": "select",
+      "creatable": true,
       "multiple": false,
       "label": "Targeted user quarantine tag",
       "required": true,
@@ -249,6 +254,7 @@
     },
     "TargetedDomainQuarantineTag": {
       "type": "select",
+      "creatable": true,
       "multiple": false,
       "label": "Targeted domain quarantine tag",
       "required": true,

@@ -5,8 +5,8 @@ function Update-CIPPSAMCertificate {
 
     .DESCRIPTION
     Loads Key Vault SAMCertificate current/previous versions as the Entra keep-set.
-    On every run, removes proven CIPP debris (older KV thumbprints or CIPP-SAM displayName
-    orphans) while preserving unknown credentials. Mints only when missing, near expiry,
+    On every run, removes proven CIPP debris (older KV thumbprints from this instance's own
+    history) while preserving every other credential. Mints only when missing, near expiry,
     or -Force. Drift re-registers the same stored public key without minting. Renewal
     keeps at most the previous current plus the new cert, then stores the PFX under the
     same KV name. Store failure rolls back only the newly added credential.
@@ -23,6 +23,12 @@ function Update-CIPPSAMCertificate {
     .PARAMETER Headers
     Optional pre-built authorization headers for the Graph calls (e.g. the delegated token
     during the setup wizard, before the app's own credentials are usable).
+
+    .PARAMETER LogHeaders
+    Request headers of the acting user, recorded on the change log entries.
+
+    .PARAMETER APIName
+    API name for the change log entries. Defaults to SAMCertificate.
 
     .EXAMPLE
     Update-CIPPSAMCertificate
@@ -41,7 +47,13 @@ function Update-CIPPSAMCertificate {
         [string]$ApplicationId,
 
         [Parameter(Mandatory = $false)]
-        $Headers
+        $Headers,
+
+        [Parameter(Mandatory = $false)]
+        $LogHeaders,
+
+        [Parameter(Mandatory = $false)]
+        [string]$APIName = 'SAMCertificate'
     )
 
     $AppId = if ($ApplicationId) { $ApplicationId } else { $env:ApplicationID }
@@ -207,7 +219,7 @@ function Update-CIPPSAMCertificate {
             throw
         }
 
-        Write-LogMessage -API 'SAMCertificate' -message "SAM certificate renewed for $AppId. Thumbprint: $($NewCert.Thumbprint), expires: $($NewCert.NotAfter), storage mode: $($StoreResult.StorageMode). Reason: $MintReason. Removed $($Classification.RemovedCount) CIPP debris." -sev 'Info'
+        Write-LogMessage -headers $LogHeaders -API $APIName -tenant 'Global' -message "$(if ($LogHeaders) { 'Manual renewal' } else { 'Scheduled renewal' }): SAM certificate renewed for $AppId. Thumbprint: $($NewCert.Thumbprint), expires: $($NewCert.NotAfter), storage mode: $($StoreResult.StorageMode). Reason: $MintReason. Removed $($Classification.RemovedCount) CIPP debris." -sev 'Alert'
 
         return [PSCustomObject]@{
             Renewed      = $true
@@ -219,9 +231,15 @@ function Update-CIPPSAMCertificate {
         }
     }
 
+    # Keep the process-wide preload in line with what is now registered on the app.
+    if ($Current.PfxBase64) {
+        Update-CIPPSAMCertificateEnvCache -Name 'SAMCertificate' -PfxBase64 $Current.PfxBase64
+    }
+
     $ResultThumbprint = $Current.Thumbprint
     $ResultNotAfter = $Current.NotAfter
-    Write-LogMessage -API 'SAMCertificate' -message "SAM certificate reconciled for $AppId. Thumbprint: $ResultThumbprint, drift=$Drift, removed $($Classification.RemovedCount) CIPP debris." -sev 'Info'
+    $ReconcileSev = if ($Drift -or $Classification.RemovedCount -gt 0) { 'Alert' } else { 'Info' }
+    Write-LogMessage -headers $LogHeaders -API $APIName -tenant 'Global' -message "$(if ($LogHeaders) { 'Manual renewal' } else { 'Scheduled renewal' }): SAM certificate reconciled for $AppId. Thumbprint: $ResultThumbprint, drift=$Drift, removed $($Classification.RemovedCount) CIPP debris." -sev $ReconcileSev
 
     return [PSCustomObject]@{
         Renewed      = $false
@@ -265,9 +283,9 @@ function Get-CIPPSAMCredentialClassification {
             continue
         }
 
-        $IsCippDisplayName = $Credential.displayName -like 'CIPP-SAM Certificate*'
-        $InHistorical = $HistoricalThumbprints.Contains($Thumbprint)
-        if ($InHistorical -or $IsCippDisplayName) {
+        # Only prune certs this instance itself stored (any KV version outside the keep-set).
+        # Other instances sharing the SAM app use the same displayName prefix; never touch theirs.
+        if ($HistoricalThumbprints.Contains($Thumbprint) -or $KnownThumbprints -contains $Thumbprint) {
             $RemovedCount++
             Write-Information "Pruning CIPP key credential $($Credential.keyId) thumbprint=$Thumbprint displayName=$($Credential.displayName)"
             continue
